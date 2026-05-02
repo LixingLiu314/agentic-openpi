@@ -825,6 +825,48 @@ _CONFIGS = [
         num_train_steps=20_000,
         batch_size=64,
     ),
+    # Fine-tuning on custom Aloha banana dataset (local LeRobot v2.1 data).
+    # Dataset symlink: ln -s <raw_path> ~/.cache/huggingface/lerobot/lixing/aloha_banana
+    # JAX->PyTorch weight conversion (run once after downloading pi05_base):
+    #   python examples/convert_jax_model_to_pytorch.py \
+    #     --checkpoint_dir ~/.cache/openpi/openpi-assets/checkpoints/pi05_base \
+    #     --config_name pi05_aloha_pen_uncap \
+    #     --output_path ./checkpoints/pi05_base_pytorch
+    TrainConfig(
+        name="pi05_aloha_banana",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaDataConfig(
+            repo_id="lixing/aloha_banana",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                        }
+                    )
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=10_000,
+        batch_size=32,
+        save_interval=500,
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
     #
     # Fine-tuning DROID configs.
     #
