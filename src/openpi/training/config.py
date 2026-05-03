@@ -922,6 +922,54 @@ _CONFIGS = [
         ),
         policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
     ),
+    # Fine-tuning with segment-boundary subtask labels (each frame uses its actual segment label).
+    # Dataset preparation:
+    #   uv run python scripts/preprocess_subtask.py --strategy segment
+    #   ln -sfn <output_dir> ~/.cache/huggingface/lerobot/lixing/aloha_banana_subtask_segment
+    TrainConfig(
+        name="pi05_aloha_banana_subtask_segment",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaDataConfig(
+            repo_id="lixing/aloha_banana_subtask_segment",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                            "subtask": "subtask",
+                        }
+                    ),
+                    _transforms.AppendSubtaskToPrompt(),
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=2.5e-5,
+            decay_steps=5_000,
+            decay_lr=2.5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
     #
     # Fine-tuning DROID configs.
     #

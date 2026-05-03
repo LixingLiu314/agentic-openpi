@@ -168,3 +168,4 @@ cython_debug/
 #.idea/
 aloha_lerobot_actionequalstate_absinfo_butinstatsgroot_armdelta_gripperabs/
 aloha_lerobot_subtask/
+aloha_lerobot_subtask_segment/
