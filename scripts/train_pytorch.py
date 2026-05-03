@@ -431,6 +431,12 @@ def train_loop(config: _config.TrainConfig, debug_steps: int = 0, debug_samples:
         os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128,expandable_segments:True"
         logging.info("Enabled memory optimizations for 8+ GPU training")
 
+    if config.freeze_vlm:
+        model.paligemma_with_expert.paligemma.requires_grad_(False)
+        frozen = sum(p.numel() for p in model.paligemma_with_expert.paligemma.parameters())
+        total = sum(p.numel() for p in model.parameters())
+        logging.info(f"Froze PaliGemma VLM: {frozen:,} / {total:,} params frozen, {total - frozen:,} trainable")
+
     if use_ddp:
         model = torch.nn.parallel.DistributedDataParallel(
             model,
@@ -456,9 +462,9 @@ def train_loop(config: _config.TrainConfig, debug_steps: int = 0, debug_samples:
     decay_steps = config.lr_schedule.decay_steps
     end_lr = config.lr_schedule.decay_lr
 
-    # Create optimizer with config parameters
+    # Create optimizer with config parameters (skip frozen params)
     optim = torch.optim.AdamW(
-        model.parameters(),
+        [p for p in model.parameters() if p.requires_grad],
         lr=peak_lr,
         betas=(config.optimizer.b1, config.optimizer.b2),
         eps=config.optimizer.eps,
