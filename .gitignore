@@ -167,3 +167,4 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 aloha_lerobot_actionequalstate_absinfo_butinstatsgroot_armdelta_gripperabs/
+aloha_lerobot_subtask/

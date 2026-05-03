@@ -23,12 +23,14 @@ Multi-Node Training:
 
 """
 
+import argparse
 import dataclasses
 import gc
 import logging
 import os
 import platform
 import shutil
+import sys
 import time
 
 import jax
@@ -306,7 +308,7 @@ def log_memory_usage(device, step, phase="unknown"):
     )
 
 
-def train_loop(config: _config.TrainConfig):
+def train_loop(config: _config.TrainConfig, debug_steps: int = 0, debug_samples: int = 4):
     use_ddp, local_rank, device = setup_ddp()
     is_main = (not use_ddp) or (dist.get_rank() == 0)
     set_seed(config.seed, local_rank)
@@ -479,6 +481,17 @@ def train_loop(config: _config.TrainConfig):
         cos = 0.5 * (1 + np.cos(np.pi * progress))
         return end_lr + (peak_lr - end_lr) * cos
 
+    # Set up debug input saver (main process only)
+    debug_saver = None
+    if is_main and debug_steps > 0:
+        import sys
+        import pathlib
+        sys.path.insert(0, str(pathlib.Path(__file__).parent))
+        from debug_utils import DebugInputSaver
+        debug_dir = config.checkpoint_dir / "debug"
+        debug_saver = DebugInputSaver(debug_dir, num_samples=debug_samples)
+        logging.info(f"Debug mode: saving first {debug_steps} steps to {debug_dir}")
+
     model.train()
     start_time = time.time()
     infos = []  # Collect stats over log interval
@@ -534,6 +547,10 @@ def train_loop(config: _config.TrainConfig):
                 losses = torch.tensor(losses, device=device, dtype=torch.float32)
 
             loss = losses.mean()
+
+            # Save debug inputs (main process only, first debug_steps steps)
+            if debug_saver is not None and global_step < debug_steps:
+                debug_saver.save(global_step, observation, actions, loss=loss.item())
 
             # Backward pass
             loss.backward()
@@ -624,8 +641,18 @@ def train_loop(config: _config.TrainConfig):
 
 def main():
     init_logging()
+
+    # Parse debug-specific args before handing the rest to tyro.
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--debug_steps", type=int, default=0,
+                        help="Save model inputs for the first N training steps (0 = disabled).")
+    parser.add_argument("--debug_samples", type=int, default=4,
+                        help="Number of samples per batch to save in debug mode.")
+    debug_args, remaining = parser.parse_known_args()
+    sys.argv = [sys.argv[0]] + remaining
+
     config = _config.cli()
-    train_loop(config)
+    train_loop(config, debug_steps=debug_args.debug_steps, debug_samples=debug_args.debug_samples)
 
 
 if __name__ == "__main__":

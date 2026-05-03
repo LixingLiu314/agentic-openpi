@@ -325,6 +325,28 @@ class PromptFromLeRobotTask(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class AppendSubtaskToPrompt(DataTransformFn):
+    """Appends the per-frame subtask label to the existing prompt.
+
+    Expects a 'subtask' key in data (string or 0-d numpy array) produced by
+    offline preprocessing.  Combines with the existing 'prompt' as:
+        "<task>, subtask: <subtask_label>"
+    and removes the 'subtask' key so downstream transforms are unaffected.
+    """
+
+    def __call__(self, data: DataDict) -> DataDict:
+        subtask = data.pop("subtask", None)
+        if subtask is None:
+            return data
+        prompt = data.get("prompt", "")
+        if not isinstance(prompt, str):
+            prompt = str(prompt.item() if hasattr(prompt, "item") else prompt)
+        if not isinstance(subtask, str):
+            subtask = str(subtask.item() if hasattr(subtask, "item") else subtask)
+        return {**data, "prompt": f"{prompt}, subtask: {subtask}"}
+
+
+@dataclasses.dataclass(frozen=True)
 class PadStatesAndActions(DataTransformFn):
     """Zero-pads states and actions to the model action dimension."""
 
