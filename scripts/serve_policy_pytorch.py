@@ -24,16 +24,54 @@ import sys
 import types
 
 
-class _Stub(types.ModuleType):
-    """Module stub that returns a new Stub for any attribute access."""
-    def __getattr__(self, attr: str) -> "_Stub":
-        child = _Stub(f"{self.__name__}.{attr}")
+# ── Stub design ──────────────────────────────────────────────────────────────
+# Problem: checkpoints.py does things like:
+#
+#   class CallbackHandler(ocp.AsyncCheckpointHandler): ...
+#   @ocp.args.register_with_handler(CallbackHandler, for_save=True)
+#   class CallbackSave(ocp.args.CheckpointArgs): ...
+#
+# Attribute access on a stub must therefore return a real *class* (a type),
+# not a module instance, so that Python can use it as a base class.
+# Calling the stub with kwargs (factory pattern) must return an identity
+# decorator so that @stub(args) leaves the decorated class unchanged.
+
+class _StubMeta(type):
+    """Metaclass for stub classes — supports attribute access and decorator use."""
+
+    def __getattr__(cls, attr: str) -> type:
+        child = _StubMeta(f"{cls.__name__}.{attr}", (object,), {})
+        setattr(cls, attr, child)
+        return child
+
+    def __call__(cls, *args, **kwargs):  # noqa: ANN002,ANN003
+        # @stub  →  return the decorated object unchanged
+        if len(args) == 1 and callable(args[0]) and not kwargs:
+            return args[0]
+        # @stub(args)  →  return identity decorator
+        if kwargs or len(args) > 0:
+            return lambda fn: fn
+        return super().__call__()
+
+    def __repr__(cls) -> str:
+        return f"<StubClass '{cls.__name__}'>"
+
+
+class _StubModule(types.ModuleType):
+    """Module-level stub — safe entry in sys.modules (has no __file__)."""
+
+    def __getattr__(self, attr: str) -> type:
+        # Raise AttributeError for dunder attrs so inspect.getmodule() works.
+        if attr.startswith("__") and attr.endswith("__"):
+            raise AttributeError(attr)
+        # Return a real class stub (not a module instance) so it can be
+        # used as a base class or decorator.
+        child = _StubMeta(f"{self.__name__}.{attr}", (object,), {})
         setattr(self, attr, child)
         return child
-    def __call__(self, *a, **kw):  # noqa: ANN002,ANN003
-        return _Stub(f"{self.__name__}()")
+
     def __repr__(self) -> str:
-        return f"<Stub '{self.__name__}'>"
+        return f"<StubModule '{self.__name__}'>"
 
 
 for _mod_name in [
@@ -44,7 +82,7 @@ for _mod_name in [
     "orbax.checkpoint.utils",
 ]:
     if _mod_name not in sys.modules:
-        sys.modules[_mod_name] = _Stub(_mod_name)
+        sys.modules[_mod_name] = _StubModule(_mod_name)
 
 # ── Now safe to import openpi ─────────────────────────────────────────────────
 # Re-use serve_policy.main() directly — all logic lives there.
