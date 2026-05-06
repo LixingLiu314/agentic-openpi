@@ -40,6 +40,12 @@ class _StubMeta(type):
     """Metaclass for stub classes — supports attribute access and decorator use."""
 
     def __getattr__(cls, attr: str) -> type:
+        # Raise AttributeError for dunders so Python's dataclass machinery,
+        # inspect, and other introspection tools see a normal empty class.
+        # e.g. __dataclass_fields__ must be absent (not a stub) so that
+        # @dataclasses.dataclass can process subclasses of stub base classes.
+        if attr.startswith("__") and attr.endswith("__"):
+            raise AttributeError(attr)
         child = _StubMeta(f"{cls.__name__}.{attr}", (object,), {})
         setattr(cls, attr, child)
         return child
