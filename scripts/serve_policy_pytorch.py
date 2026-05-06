@@ -24,11 +24,16 @@ import sys
 import types
 
 
-def _make_stub(name: str) -> types.ModuleType:
-    mod = types.ModuleType(name)
-    # Return a harmless object for any attribute access.
-    mod.__getattr__ = lambda self, _: _make_stub(f"{name}.<attr>")  # type: ignore[method-assign]
-    return mod
+class _Stub(types.ModuleType):
+    """Module stub that returns a new Stub for any attribute access."""
+    def __getattr__(self, attr: str) -> "_Stub":
+        child = _Stub(f"{self.__name__}.{attr}")
+        setattr(self, attr, child)
+        return child
+    def __call__(self, *a, **kw):  # noqa: ANN002,ANN003
+        return _Stub(f"{self.__name__}()")
+    def __repr__(self) -> str:
+        return f"<Stub '{self.__name__}'>"
 
 
 for _mod_name in [
@@ -39,15 +44,7 @@ for _mod_name in [
     "orbax.checkpoint.utils",
 ]:
     if _mod_name not in sys.modules:
-        sys.modules[_mod_name] = _make_stub(_mod_name)
-
-# Also give orbax.checkpoint a usable CheckpointManager stub so that
-# any isinstance() checks or type annotations don't blow up.
-import orbax.checkpoint as _ocp_stub  # noqa: E402  (already a stub)
-
-_ocp_stub.CheckpointManager = type("CheckpointManager", (), {})  # type: ignore[attr-defined]
-_ocp_stub.PyTreeCheckpointer = type("PyTreeCheckpointer", (), {})  # type: ignore[attr-defined]
-_ocp_stub.Checkpointer = type("Checkpointer", (), {})  # type: ignore[attr-defined]
+        sys.modules[_mod_name] = _Stub(_mod_name)
 
 # ── Now safe to import openpi ─────────────────────────────────────────────────
 # Re-use serve_policy.main() directly — all logic lives there.
