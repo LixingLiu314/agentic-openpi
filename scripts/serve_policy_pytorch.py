@@ -52,7 +52,17 @@ import logging  # noqa: E402
 
 import tyro  # noqa: E402
 
-from scripts.serve_policy import Args, main  # noqa: E402
+import importlib.util as _ilu
+import pathlib as _pl
+
+_spec = _ilu.spec_from_file_location(
+    "serve_policy",
+    _pl.Path(__file__).parent / "serve_policy.py",
+)
+_serve = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_serve)
+Args = _serve.Args
+main = _serve.main
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, force=True)
