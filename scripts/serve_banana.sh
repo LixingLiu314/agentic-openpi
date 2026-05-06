@@ -8,9 +8,9 @@ CKPT_STEP=${CKPT_STEP:-5000}
 PORT=${PORT:-8000}
 PROMPT=${PROMPT:-"put banana in the green plate"}
 
-uv run scripts/serve_policy.py \
+python scripts/serve_policy.py \
     --env ALOHA \
-    --default_prompt "${PROMPT}" \
+    --default-prompt "${PROMPT}" \
     --port "${PORT}" \
     policy:checkpoint \
     --policy.config pi05_aloha_banana \
