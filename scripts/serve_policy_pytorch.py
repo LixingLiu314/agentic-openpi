@@ -104,7 +104,14 @@ _spec = _ilu.spec_from_file_location(
     _pl.Path(__file__).parent / "serve_policy.py",
 )
 _serve = _ilu.module_from_spec(_spec)
-_spec.loader.exec_module(_serve)
+# Register before exec_module so inspect.getsource() can find the module
+# (tyro uses it to parse docstrings for --help text).
+sys.modules["serve_policy"] = _serve
+try:
+    _spec.loader.exec_module(_serve)
+except Exception:
+    del sys.modules["serve_policy"]
+    raise
 Args = _serve.Args
 main = _serve.main
 
