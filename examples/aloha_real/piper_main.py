@@ -54,6 +54,9 @@ class Args:
     # Safety: skip publishing joint commands (still runs observation + model)
     dry_run: bool = False
 
+    # Only move to reset position and exit, without running inference
+    reset_only: bool = False
+
     # PiperRealEnv overrides (leave empty to use defaults from piper_real_env.py)
     img_front_topic:   str = "/camera_f/color/image_raw"
     img_left_topic:    str = "/camera_l/color/image_raw"
@@ -104,6 +107,12 @@ def main(args: Args) -> None:
         reset_position=metadata.get("reset_pose"),
         **piper_kwargs,
     )
+
+    if args.reset_only:
+        logging.info("RESET ONLY: moving to reset position and exiting.")
+        environment.reset()
+        logging.info("Reset complete.")
+        return
 
     runtime = _runtime.Runtime(
         environment=environment,
