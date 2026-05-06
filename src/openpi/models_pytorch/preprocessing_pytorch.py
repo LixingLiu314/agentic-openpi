@@ -34,7 +34,7 @@ def preprocess_observation_pytorch(
     batch_shape = observation.state.shape[:-1]
 
     out_images = {}
-    for key in image_keys:
+    for key in observation.images.keys():
         image = observation.images[key]
 
         # TODO: This is a hack to handle both [B, C, H, W] and [B, H, W, C] formats

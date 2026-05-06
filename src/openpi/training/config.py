@@ -279,6 +279,46 @@ class LeRobotAlohaDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class LeRobotAlohaWithSubgoalDataConfig(LeRobotAlohaDataConfig):
+    """LeRobotAlohaDataConfig extended with subgoal image camera inputs.
+
+    Uses AlohaWithSubgoalInputs instead of AlohaInputs so that subgoal images
+    loaded under 'subgoal_images' in the repack transform are injected into the
+    model's 'image' dict alongside the regular camera images.
+
+    subgoal_camera_map: tuple of (source_camera_name, dest_model_key) pairs.
+    """
+
+    subgoal_camera_map: tuple[tuple[str, str], ...] = ()
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        data_transforms = _transforms.Group(
+            inputs=[aloha_policy.AlohaWithSubgoalInputs(
+                adapt_to_pi=self.adapt_to_pi,
+                subgoal_camera_map=self.subgoal_camera_map,
+            )],
+            outputs=[aloha_policy.AlohaOutputs(adapt_to_pi=self.adapt_to_pi)],
+        )
+        if self.use_delta_joint_actions:
+            delta_action_mask = _transforms.make_bool_mask(6, -1, 6, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory(default_prompt=self.default_prompt)(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=self.repack_transforms,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=self.action_sequence_keys,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class LeRobotLiberoDataConfig(DataConfigFactory):
     """
     This config is used to configure transforms that are applied at various parts of the data pipeline.
@@ -1018,6 +1058,114 @@ _CONFIGS = [
             peak_lr=2.5e-5,
             decay_steps=5_000,
             decay_lr=2.5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
+    # Fine-tuning with subgoal image (base camera only).
+    # Subgoal for frame i = frame min((i//30+1)*30, last_frame) of cam_high.
+    # Dataset preparation:
+    #   uv run python scripts/preprocess_subgoal.py --version base
+    #   ln -sfn <output_dir> ~/.cache/huggingface/lerobot/lixing/aloha_banana_subgoal_base
+    TrainConfig(
+        name="pi05_aloha_banana_subgoal_base",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaWithSubgoalDataConfig(
+            repo_id="lixing/aloha_banana_subgoal_base",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            subgoal_camera_map=(("cam_high", "subgoal_base_0_rgb"),),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "subgoal_images": {
+                                "cam_high": "observation.images.cam_high_subgoal",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                        }
+                    )
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=5e-5,
+            decay_steps=5_000,
+            decay_lr=5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
+    # Fine-tuning with subgoal image (all three cameras).
+    # Subgoal for frame i = frame min((i//30+1)*30, last_frame) of all cameras.
+    # Dataset preparation:
+    #   uv run python scripts/preprocess_subgoal.py --version all
+    #   ln -sfn <output_dir> ~/.cache/huggingface/lerobot/lixing/aloha_banana_subgoal_all
+    TrainConfig(
+        name="pi05_aloha_banana_subgoal_all",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaWithSubgoalDataConfig(
+            repo_id="lixing/aloha_banana_subgoal_all",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            subgoal_camera_map=(
+                ("cam_high", "subgoal_base_0_rgb"),
+                ("cam_left_wrist", "subgoal_left_wrist_0_rgb"),
+                ("cam_right_wrist", "subgoal_right_wrist_0_rgb"),
+            ),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "subgoal_images": {
+                                "cam_high": "observation.images.cam_high_subgoal",
+                                "cam_left_wrist": "observation.images.cam_left_wrist_subgoal",
+                                "cam_right_wrist": "observation.images.cam_right_wrist_subgoal",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                        }
+                    )
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=5e-5,
+            decay_steps=5_000,
+            decay_lr=5e-6,
         ),
         policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
     ),

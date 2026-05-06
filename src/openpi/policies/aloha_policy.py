@@ -88,6 +88,35 @@ class AlohaInputs(transforms.DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class AlohaWithSubgoalInputs(AlohaInputs):
+    """AlohaInputs extended with subgoal image support.
+
+    Expects a 'subgoal_images' key in data (dict of camera_name -> image array).
+    After running standard AlohaInputs logic, injects subgoal images into the
+    output 'image' dict under new model-friendly keys.
+
+    subgoal_camera_map: tuple of (source_camera_name, dest_model_key) pairs.
+      e.g. (("cam_high", "subgoal_base_0_rgb"),) for base-only version.
+    """
+
+    subgoal_camera_map: tuple[tuple[str, str], ...] = ()
+
+    def __call__(self, data: dict) -> dict:
+        subgoal_imgs = data.pop("subgoal_images", {})
+        result = super().__call__(data)
+        for src, dst in self.subgoal_camera_map:
+            img = subgoal_imgs.get(src)
+            if img is not None:
+                img = np.asarray(img)
+                if np.issubdtype(img.dtype, np.floating):
+                    img = (255 * img).astype(np.uint8)
+                img = einops.rearrange(img, "c h w -> h w c")
+                result["image"][dst] = img
+                result["image_mask"][dst] = np.True_
+        return result
+
+
+@dataclasses.dataclass(frozen=True)
 class AlohaOutputs(transforms.DataTransformFn):
     """Outputs for the Aloha policy."""
 
