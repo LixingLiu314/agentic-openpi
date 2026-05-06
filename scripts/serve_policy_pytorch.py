@@ -3,7 +3,7 @@ PyTorch-only policy server — no JAX native extensions required.
 
 Functionally identical to serve_policy.py but stubs out augmax / orbax
 before they are imported, so the process does not segfault on machines
-where those JAX packages have incompatible native libraries.
+where those JAX packages conflict when imported after flax/jax initialization.
 
 The stubs are safe because:
   - augmax is only used in the JAX training pipeline (data augmentation).
@@ -25,16 +25,16 @@ import types
 
 
 # ── Stub design ──────────────────────────────────────────────────────────────
-# Problem: checkpoints.py does things like:
+# checkpoints.py does things like:
 #
 #   class CallbackHandler(ocp.AsyncCheckpointHandler): ...
 #   @ocp.args.register_with_handler(CallbackHandler, for_save=True)
 #   class CallbackSave(ocp.args.CheckpointArgs): ...
 #
-# Attribute access on a stub must therefore return a real *class* (a type),
-# not a module instance, so that Python can use it as a base class.
-# Calling the stub with kwargs (factory pattern) must return an identity
-# decorator so that @stub(args) leaves the decorated class unchanged.
+# Attribute access on a stub must return a real *class* (a type), not a module
+# instance, so Python can use it as a base class.
+# Calling the stub with kwargs must return an identity decorator so that
+# @stub(args) leaves the decorated class unchanged.
 
 class _StubMeta(type):
     """Metaclass for stub classes — supports attribute access and decorator use."""
@@ -42,8 +42,6 @@ class _StubMeta(type):
     def __getattr__(cls, attr: str) -> type:
         # Raise AttributeError for dunders so Python's dataclass machinery,
         # inspect, and other introspection tools see a normal empty class.
-        # e.g. __dataclass_fields__ must be absent (not a stub) so that
-        # @dataclasses.dataclass can process subclasses of stub base classes.
         if attr.startswith("__") and attr.endswith("__"):
             raise AttributeError(attr)
         child = _StubMeta(f"{cls.__name__}.{attr}", (object,), {})
@@ -70,8 +68,7 @@ class _StubModule(types.ModuleType):
         # Raise AttributeError for dunder attrs so inspect.getmodule() works.
         if attr.startswith("__") and attr.endswith("__"):
             raise AttributeError(attr)
-        # Return a real class stub (not a module instance) so it can be
-        # used as a base class or decorator.
+        # Return a real class stub so it can be used as a base class or decorator.
         child = _StubMeta(f"{self.__name__}.{attr}", (object,), {})
         setattr(self, attr, child)
         return child
@@ -91,13 +88,10 @@ for _mod_name in [
         sys.modules[_mod_name] = _StubModule(_mod_name)
 
 # ── Now safe to import openpi ─────────────────────────────────────────────────
-# Re-use serve_policy.main() directly — all logic lives there.
 import logging  # noqa: E402
-
 import tyro  # noqa: E402
-
-import importlib.util as _ilu
-import pathlib as _pl
+import importlib.util as _ilu  # noqa: E402
+import pathlib as _pl  # noqa: E402
 
 _spec = _ilu.spec_from_file_location(
     "serve_policy",
