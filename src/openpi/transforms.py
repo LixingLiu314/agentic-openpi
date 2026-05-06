@@ -346,6 +346,28 @@ class AppendSubtaskToPrompt(DataTransformFn):
         return {**data, "prompt": f"{prompt}, subtask: {subtask}"}
 
 
+class AppendTrajCotToPrompt(DataTransformFn):
+    """Appends the per-frame trajectory COT string to the existing prompt.
+
+    Expects a 'traj_cot' key in data produced by offline preprocessing
+    (scripts/preprocess_traj.py).  COT coordinates are already encoded as
+    PaliGemma <loc> tokens.  Combines with the existing 'prompt' as:
+        "<task>, traj: <traj_cot_text>"
+    and removes the 'traj_cot' key so downstream transforms are unaffected.
+    """
+
+    def __call__(self, data: DataDict) -> DataDict:
+        traj_cot = data.pop("traj_cot", None)
+        if traj_cot is None:
+            return data
+        prompt = data.get("prompt", "")
+        if not isinstance(prompt, str):
+            prompt = str(prompt.item() if hasattr(prompt, "item") else prompt)
+        if not isinstance(traj_cot, str):
+            traj_cot = str(traj_cot.item() if hasattr(traj_cot, "item") else traj_cot)
+        return {**data, "prompt": f"{prompt}, traj: {traj_cot}"}
+
+
 @dataclasses.dataclass(frozen=True)
 class PadStatesAndActions(DataTransformFn):
     """Zero-pads states and actions to the model action dimension."""
