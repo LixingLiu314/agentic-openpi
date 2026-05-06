@@ -8,7 +8,7 @@ CKPT_STEP=${CKPT_STEP:-5000}
 PORT=${PORT:-8000}
 PROMPT=${PROMPT:-"put banana in the green plate"}
 
-JAX_PLATFORMS=cpu python scripts/serve_policy.py \
+JAX_PLATFORMS=cpu python scripts/serve_policy_pytorch.py \
     --env ALOHA \
     --default-prompt "${PROMPT}" \
     --port "${PORT}" \
