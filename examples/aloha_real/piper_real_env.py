@@ -172,11 +172,15 @@ class PiperRealEnv:
             jsr_vel = list(self._js_right.velocity) if self._js_right.velocity else []
         return high, left, right, jsl_pos, jsr_pos, jsl_vel, jsr_vel
 
+    # Piper joint names expected by the arm driver
+    _JOINT_NAMES: list = ["joint0", "joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+
     def _publish_cmd(self, left_cmd: np.ndarray, right_cmd: np.ndarray) -> None:
         """Publish 7-dim (arm×6 + gripper×1) JointState to both arms."""
         for pub, cmd in ((self._pub_left, left_cmd), (self._pub_right, right_cmd)):
             msg = JointState()
             msg.header.stamp = rospy.Time.now()
+            msg.name = self._JOINT_NAMES
             msg.position = cmd.tolist()
             pub.publish(msg)
 
