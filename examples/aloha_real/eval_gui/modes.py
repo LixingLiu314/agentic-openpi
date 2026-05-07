@@ -32,7 +32,7 @@ import json
 import logging
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import einops
 import numpy as np
@@ -47,10 +47,10 @@ logger = logging.getLogger(__name__)
 # At runtime the user can edit them in the GUI or load a JSON override.
 # ---------------------------------------------------------------------------
 DEFAULT_SUBTASK_LABELS: Dict[int, str] = {
-    1: "reach_the_banana_end",
-    2: "grasp_the_banana_end",
-    3: "move_the_banana_to_the_green_plate_end",
-    4: "place_the_banana_in_the_green_plate_end",
+    1: "reach the banana",
+    2: "grasp the banana",
+    3: "move the banana to the green plate",
+    4: "place the banana in the green plate",
 }
 
 
@@ -79,8 +79,15 @@ class RuntimeState:
     last_subtask_label: str = ""
     last_traj_text: str = ""
     last_subgoal_image: Optional[np.ndarray] = None    # HWC uint8 RGB
+    waiting_for_subtask_input: bool = False
 
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+    subtask_input_seq: int = 0
+    subtask_wake_seq: int = 0
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False, compare=False)
+    _subtask_cond: threading.Condition = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self._subtask_cond = threading.Condition(self._lock)
 
     # --- helpers -------------------------------------------------------- #
     def load_subtasks_from_json(self, path: str) -> None:
@@ -90,24 +97,67 @@ class RuntimeState:
         new = {int(k): str(v) for k, v in data.items() if str(k).isdigit()}
         if not new:
             raise ValueError(f"No usable {{int_key: str_label}} entries in {path}")
-        with self._lock:
+        with self._subtask_cond:
             self.subtask_labels = new
             if self.subtask_key not in new:
                 self.subtask_key = sorted(new.keys())[0]
+            self.subtask_input_seq += 1
+            self._subtask_cond.notify_all()
 
     def set_subtask_label(self, key: int, label: str) -> None:
-        with self._lock:
-            self.subtask_labels[int(key)] = str(label)
+        key = int(key)
+        with self._subtask_cond:
+            self.subtask_labels[key] = str(label)
+            if key == self.subtask_key:
+                self.subtask_input_seq += 1
+                self._subtask_cond.notify_all()
+
+    def set_subtask_key(self, key: int) -> None:
+        """Select or confirm a subtask key and wake blocking Mode 3 waits."""
+        with self._subtask_cond:
+            self.subtask_key = int(key)
+            self.subtask_input_seq += 1
+            self._subtask_cond.notify_all()
+
+    def wait_for_subtask_input(
+        self,
+        after_seq: int,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> Optional[int]:
+        """Block until the operator provides a new subtask key/confirmation."""
+        with self._subtask_cond:
+            wake_seq = self.subtask_wake_seq
+            self.waiting_for_subtask_input = True
+            try:
+                while True:
+                    if self.subtask_input_seq > after_seq:
+                        return self.subtask_input_seq
+                    if self.subtask_wake_seq > wake_seq:
+                        return None
+                    if cancel_check is not None and cancel_check():
+                        return None
+                    self._subtask_cond.wait(timeout=0.1)
+            finally:
+                self.waiting_for_subtask_input = False
+
+    def wake_subtask_waiters(self) -> None:
+        """Release any blocking subtask wait, used when stopping or switching."""
+        with self._subtask_cond:
+            self.subtask_wake_seq += 1
+            self._subtask_cond.notify_all()
 
     def clear(self) -> None:
         """Wipe all live-display fields. Call after Stop so the next run
         starts with a blank slate.
         """
-        with self._lock:
+        with self._subtask_cond:
             self.last_prompt = ""
             self.last_subtask_label = ""
             self.last_traj_text = ""
             self.last_subgoal_image = None
+            self.waiting_for_subtask_input = False
+            self.subtask_wake_seq += 1
+            self._subtask_cond.notify_all()
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
@@ -120,6 +170,7 @@ class RuntimeState:
                 "prompt": self.last_prompt,
                 "traj_text": self.last_traj_text,
                 "subgoal_image": self.last_subgoal_image,
+                "waiting_for_subtask_input": self.waiting_for_subtask_input,
             }
 
 
@@ -134,6 +185,20 @@ class ModeHandler:
 
     def build_obs(self, raw_obs: Dict[str, Any], runtime: RuntimeState) -> Dict[str, Any]:
         raise NotImplementedError
+
+    def before_control_step(
+        self,
+        raw_obs: Dict[str, Any],
+        runtime: RuntimeState,
+        loop_step: int,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> bool:
+        """Run per-control-step gating before cached actions are consumed.
+
+        Return True when the action broker should discard any cached action
+        chunk and request a fresh VLA inference for this step.
+        """
+        return False
 
     # Run-time knobs (only meaningful for traj / subtask / subgoal). The base
     # impls are no-ops so the GUI can call them blindly.
@@ -191,6 +256,8 @@ class SubtaskMode(ModeHandler):
         self._lock = threading.Lock()
         self._inflight: Optional[threading.Thread] = None
         self._suggestion: Optional[int] = None  # last auto suggestion
+        self._last_manual_seq: Optional[int] = None
+        self._last_blocking_control_step: Optional[int] = None
 
     def reset(self) -> None:
         with self._lock:
@@ -198,6 +265,8 @@ class SubtaskMode(ModeHandler):
             self._initialized = False
             self._inflight = None
             self._suggestion = None
+            self._last_manual_seq = None
+            self._last_blocking_control_step = None
         if self._predictor is not None and hasattr(self._predictor, "reset"):
             self._predictor.reset()
 
@@ -217,18 +286,71 @@ class SubtaskMode(ModeHandler):
             logger.warning("SubtaskPredictor.suggest failed: %s", e)
             return None
 
+    def before_control_step(
+        self,
+        raw_obs,
+        runtime,
+        loop_step: int,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> bool:
+        if not self._blocking:
+            return False
+        if loop_step != 0 and loop_step % self._step_interval != 0:
+            return False
+
+        with self._lock:
+            if self._last_blocking_control_step == loop_step:
+                return False
+            last_manual_seq = self._last_manual_seq
+
+        if self._predictor is not None:
+            cam = raw_obs["images"].get("cam_high")
+            if cam is None:
+                return False
+            with runtime._lock:
+                labels = dict(runtime.subtask_labels)
+                task = runtime.task
+            sug = self._run_predictor(cam.copy(), task, labels)
+            with self._lock:
+                self._suggestion = sug
+                self._initialized = True
+                self._last_blocking_control_step = loop_step
+            return True
+
+        with runtime._lock:
+            current_seq = runtime.subtask_input_seq
+        if last_manual_seq is None:
+            last_manual_seq = current_seq
+            with self._lock:
+                if self._last_manual_seq is None:
+                    self._last_manual_seq = current_seq
+
+        if current_seq <= last_manual_seq:
+            logger.info("Blocking subtask mode waiting for subtask key input at step %d", loop_step)
+            maybe_seq = runtime.wait_for_subtask_input(last_manual_seq, cancel_check=cancel_check)
+            if maybe_seq is None:
+                return False
+            current_seq = maybe_seq
+
+        with self._lock:
+            self._last_manual_seq = current_seq
+            self._initialized = True
+            self._last_blocking_control_step = loop_step
+        return True
+
     def _maybe_update_suggestion(self, raw_obs, runtime):
         with self._lock:
             first_step = not self._initialized and self._predictor is not None
             should_request = first_step or (self._step % self._step_interval == 0)
             self._step += 1
-            blocking = first_step or self._blocking   # force-block on step 0
+            blocking = first_step or self._blocking
             in_flight = self._inflight is not None and self._inflight.is_alive()
-        # No predictor: mark initialised immediately (no external data needed).
+
         if self._predictor is None:
             with self._lock:
                 self._initialized = True
             return
+
         if not should_request:
             return
         cam = raw_obs["images"].get("cam_high")

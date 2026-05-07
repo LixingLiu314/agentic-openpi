@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import pathlib
 import threading
 import time
@@ -198,6 +197,7 @@ class EvalRunner:
 
     def pause(self) -> None:
         self._running.clear()
+        self._runtime.wake_subtask_waiters()
 
     def resume(self) -> None:
         self._running.set()
@@ -205,6 +205,7 @@ class EvalRunner:
     def stop(self) -> None:
         self._stop_evt.set()
         self._running.set()
+        self._runtime.wake_subtask_waiters()
         if self._thread is not None:
             self._thread.join(timeout=5.0)
         # ---- full state clear so the next Start is a clean run ---- #
@@ -368,7 +369,26 @@ class EvalRunner:
                 with self._obs_lock:
                     self._latest_obs = raw_obs
 
+                with self._handler_lock:
+                    handler = self._handler
+                reset_broker = handler.before_control_step(
+                    raw_obs,
+                    self._runtime,
+                    self._step_count,
+                    cancel_check=lambda: self._stop_evt.is_set() or not self._running.is_set(),
+                )
+                if reset_broker and self._broker is not None:
+                    self._broker.reset()
+                if self._stop_evt.is_set():
+                    break
+                if not self._running.is_set():
+                    continue
+
                 action = self._broker.infer(raw_obs)
+                if self._stop_evt.is_set():
+                    break
+                if not self._running.is_set():
+                    continue
                 action_arr = np.asarray(action["actions"], dtype=np.float32)
                 with self._env_lock:
                     self._env.step(action_arr)

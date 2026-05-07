@@ -27,6 +27,7 @@ Keyboard:
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import pathlib
@@ -78,6 +79,9 @@ _POLICY_PRESETS = {
     },
 }
 
+_CHECKPOINT_HISTORY_LIMIT = 30
+_CHECKPOINT_HISTORY_ENV = "AGENTIC_OPENPI_EVAL_GUI_HISTORY"
+
 
 def _np_to_qpixmap(img_hwc_rgb: Optional[np.ndarray], target_w: int, target_h: int) -> QtGui.QPixmap:
     if img_hwc_rgb is None:
@@ -115,6 +119,11 @@ class EvalGUI(QtWidgets.QMainWindow):
         self._policy_spec: Optional[tuple[str, str, int]] = None
         self._blocking = False
         self._step_interval = 6  # default for traj mode
+        self._checkpoint_history_path = self._checkpoint_history_file()
+        self._checkpoint_history: dict[str, list[str]] = {key: [] for key in _POLICY_PRESETS}
+        self._last_checkpoint_by_mode: dict[str, str] = {}
+        self._current_checkpoint_default = ""
+        self._load_checkpoint_history()
 
         self._bridge = _EventBridge()
         self._bridge.info.connect(self._log_info)
@@ -163,15 +172,14 @@ class EvalGUI(QtWidgets.QMainWindow):
         task_row.addWidget(self.le_task, 1)
         left.addLayout(task_row)
 
-        # Policy checkpoint selection
+        # Policy checkpoint selection. The selected eval mode owns the
+        # policy config; checkpoint paths are free-form and remembered.
         policy_row = QtWidgets.QHBoxLayout()
-        policy_row.addWidget(QtWidgets.QLabel("Policy:"))
-        self.cb_policy = QtWidgets.QComboBox()
-        for key in ("basic", "traj", "subtask", "subgoal"):
-            self.cb_policy.addItem(_POLICY_PRESETS[key]["label"], key)
-        self.cb_policy.currentIndexChanged.connect(self._on_policy_preset_changed)
-        policy_row.addWidget(self.cb_policy, 1)
-        policy_row.addWidget(QtWidgets.QLabel("step:"))
+        policy_row.addWidget(QtWidgets.QLabel("policy.config:"))
+        self.le_policy_config = QtWidgets.QLineEdit()
+        self.le_policy_config.setReadOnly(True)
+        policy_row.addWidget(self.le_policy_config, 1)
+        policy_row.addWidget(QtWidgets.QLabel("default step:"))
         self.sp_ckpt_step = QtWidgets.QSpinBox()
         self.sp_ckpt_step.setRange(1, 10_000_000)
         self.sp_ckpt_step.setSingleStep(500)
@@ -183,14 +191,19 @@ class EvalGUI(QtWidgets.QMainWindow):
         policy_row.addWidget(self.cb_local_policy)
         left.addLayout(policy_row)
 
-        policy_path_row = QtWidgets.QHBoxLayout()
-        policy_path_row.addWidget(QtWidgets.QLabel("policy.config:"))
-        self.le_policy_config = QtWidgets.QLineEdit()
-        policy_path_row.addWidget(self.le_policy_config, 1)
-        policy_path_row.addWidget(QtWidgets.QLabel("policy.dir:"))
-        self.le_policy_dir = QtWidgets.QLineEdit()
-        policy_path_row.addWidget(self.le_policy_dir, 2)
-        left.addLayout(policy_path_row)
+        checkpoint_row = QtWidgets.QHBoxLayout()
+        checkpoint_row.addWidget(QtWidgets.QLabel("checkpoint:"))
+        self.cb_checkpoint = QtWidgets.QComboBox()
+        self.cb_checkpoint.setEditable(True)
+        self.cb_checkpoint.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
+        self.cb_checkpoint.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.cb_checkpoint.lineEdit().editingFinished.connect(self._on_checkpoint_edited)
+        checkpoint_row.addWidget(self.cb_checkpoint, 1)
+        self.btn_browse_checkpoint = QtWidgets.QPushButton("Browse...")
+        self.btn_browse_checkpoint.clicked.connect(self._on_browse_checkpoint)
+        checkpoint_row.addWidget(self.btn_browse_checkpoint)
+        left.addLayout(checkpoint_row)
 
         # Server connection
         srv_row = QtWidgets.QHBoxLayout()
@@ -352,7 +365,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         old = self.cb_mode.blockSignals(True)
         self.cb_mode.setCurrentText(self._runtime.mode)
         self.cb_mode.blockSignals(old)
-        self._set_policy_preset_for_mode(self._runtime.mode)
+        self._refresh_policy_fields_for_mode(self._runtime.mode, prefer_history=True)
 
     # ------------------------------------------------------------------ #
     # Logging
@@ -388,28 +401,147 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.lbl_step.setText(str(n))
 
     # ------------------------------------------------------------------ #
-    def _selected_policy_key(self) -> str:
-        return self.cb_policy.currentData() or self._runtime.mode
+    @staticmethod
+    def _checkpoint_history_file() -> pathlib.Path:
+        override = os.environ.get(_CHECKPOINT_HISTORY_ENV)
+        if override:
+            return pathlib.Path(override).expanduser()
+        return pathlib.Path.home() / ".cache" / "agentic-openpi" / "eval_gui_checkpoints.json"
 
-    def _set_policy_preset_for_mode(self, mode: str) -> None:
-        idx = self.cb_policy.findData(mode)
-        if idx >= 0:
-            old = self.cb_policy.blockSignals(True)
-            self.cb_policy.setCurrentIndex(idx)
-            self.cb_policy.blockSignals(old)
-        self._refresh_policy_fields()
+    def _load_checkpoint_history(self) -> None:
+        path = self._checkpoint_history_path
+        if not path.exists():
+            return
+        try:
+            data = json.loads(path.read_text())
+        except Exception as e:                       # noqa: BLE001
+            logger.warning("Could not load checkpoint history from %s: %s", path, e)
+            return
 
-    def _refresh_policy_fields(self) -> None:
-        preset = _POLICY_PRESETS[self._selected_policy_key()]
-        step = int(self.sp_ckpt_step.value())
+        raw_history = data.get("history", data) if isinstance(data, dict) else {}
+        if isinstance(raw_history, dict):
+            for mode in _POLICY_PRESETS:
+                values = raw_history.get(mode, [])
+                if isinstance(values, str):
+                    values = [values]
+                if not isinstance(values, list):
+                    continue
+                cleaned = []
+                for value in values:
+                    text = str(value).strip()
+                    if text and text not in cleaned:
+                        cleaned.append(text)
+                self._checkpoint_history[mode] = cleaned[:_CHECKPOINT_HISTORY_LIMIT]
+
+        raw_last = data.get("last", {}) if isinstance(data, dict) else {}
+        if isinstance(raw_last, dict):
+            self._last_checkpoint_by_mode = {
+                mode: str(value).strip()
+                for mode, value in raw_last.items()
+                if mode in _POLICY_PRESETS and str(value).strip()
+            }
+
+    def _save_checkpoint_history(self) -> None:
+        payload = {
+            "history": self._checkpoint_history,
+            "last": self._last_checkpoint_by_mode,
+        }
+        try:
+            self._checkpoint_history_path.parent.mkdir(parents=True, exist_ok=True)
+            self._checkpoint_history_path.write_text(json.dumps(payload, indent=2))
+        except Exception as e:                       # noqa: BLE001
+            logger.warning("Could not save checkpoint history to %s: %s", self._checkpoint_history_path, e)
+
+    def _checkpoint_text(self) -> str:
+        return self.cb_checkpoint.currentText().strip()
+
+    def _default_checkpoint_for_mode(self, mode: str) -> str:
+        preset = _POLICY_PRESETS.get(mode, _POLICY_PRESETS["basic"])
+        return preset["dir"].format(step=int(self.sp_ckpt_step.value()))
+
+    def _checkpoint_items_for_mode(self, mode: str) -> list[str]:
+        default = self._default_checkpoint_for_mode(mode)
+        items = []
+        candidates = [
+            self._last_checkpoint_by_mode.get(mode, ""),
+            default,
+            *self._checkpoint_history.get(mode, []),
+        ]
+        for value in candidates:
+            value = value.strip()
+            if value and value not in items:
+                items.append(value)
+        return items
+
+    def _refresh_policy_fields_for_mode(
+        self,
+        mode: str,
+        *,
+        select: Optional[str] = None,
+        prefer_history: bool = False,
+    ) -> None:
+        preset = _POLICY_PRESETS.get(mode, _POLICY_PRESETS["basic"])
         self.le_policy_config.setText(preset["config"])
-        self.le_policy_dir.setText(preset["dir"].format(step=step))
 
-    def _on_policy_preset_changed(self, *_) -> None:
-        self._refresh_policy_fields()
+        previous_default = self._current_checkpoint_default
+        default = self._default_checkpoint_for_mode(mode)
+        current = self._checkpoint_text() if hasattr(self, "cb_checkpoint") else ""
+        if select is None:
+            if prefer_history:
+                select = (
+                    self._last_checkpoint_by_mode.get(mode)
+                    or next(iter(self._checkpoint_history.get(mode, [])), "")
+                    or default
+                )
+            elif not current or current == previous_default:
+                select = default
+            else:
+                select = current
+
+        old = self.cb_checkpoint.blockSignals(True)
+        self.cb_checkpoint.clear()
+        self.cb_checkpoint.addItems(self._checkpoint_items_for_mode(mode))
+        self.cb_checkpoint.setEditText(select)
+        self.cb_checkpoint.blockSignals(old)
+        self._current_checkpoint_default = default
 
     def _on_policy_step_changed(self, *_) -> None:
-        self._refresh_policy_fields()
+        current = self._checkpoint_text()
+        select = None
+        if not current or current == self._current_checkpoint_default:
+            select = self._default_checkpoint_for_mode(self._runtime.mode)
+        self._refresh_policy_fields_for_mode(self._runtime.mode, select=select)
+
+    def _remember_checkpoint(self, mode: Optional[str] = None, path: Optional[str] = None) -> None:
+        mode = mode or self._runtime.mode
+        path = (path if path is not None else self._checkpoint_text()).strip()
+        if not path:
+            return
+        entries = [p for p in self._checkpoint_history.get(mode, []) if p != path]
+        entries.insert(0, path)
+        self._checkpoint_history[mode] = entries[:_CHECKPOINT_HISTORY_LIMIT]
+        self._last_checkpoint_by_mode[mode] = path
+        self._save_checkpoint_history()
+        self._refresh_policy_fields_for_mode(mode, select=path)
+
+    def _on_checkpoint_edited(self) -> None:
+        self._remember_checkpoint()
+
+    def _on_browse_checkpoint(self) -> None:
+        current = self._checkpoint_text()
+        start_dir = _REPO_ROOT
+        if current and not current.startswith("gs://"):
+            candidate = pathlib.Path(current).expanduser()
+            if not candidate.is_absolute():
+                candidate = _REPO_ROOT / candidate
+            if candidate.exists():
+                start_dir = candidate if candidate.is_dir() else candidate.parent
+        path = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Select checkpoint directory", str(start_dir))
+        if not path:
+            return
+        self.cb_checkpoint.setEditText(path)
+        self._remember_checkpoint(path=path)
 
     def _policy_python_cmd(self) -> list[str]:
         if sys.version_info >= (3, 11):
@@ -431,15 +563,26 @@ class EvalGUI(QtWidgets.QMainWindow):
         if not self.cb_local_policy.isChecked():
             return
 
-        config = self.le_policy_config.text().strip()
-        policy_dir = self.le_policy_dir.text().strip()
+        mode = self._runtime.mode
+        config = _POLICY_PRESETS.get(mode, _POLICY_PRESETS["basic"])["config"]
+        self.le_policy_config.setText(config)
+        policy_dir = self._checkpoint_text()
         if not config or not policy_dir:
             raise ValueError("policy.config and policy.dir are required when starting a local policy server")
 
         port = int(self.le_port.text())
         host = "127.0.0.1"
         self.le_host.setText(host)
-        spec = (config, policy_dir, port)
+        policy_dir_arg = policy_dir
+
+        if not policy_dir.startswith("gs://"):
+            checkpoint_path = pathlib.Path(policy_dir).expanduser()
+            resolved = checkpoint_path if checkpoint_path.is_absolute() else _REPO_ROOT / checkpoint_path
+            if not resolved.exists():
+                raise FileNotFoundError(f"checkpoint path does not exist: {resolved}")
+            if policy_dir.startswith("~"):
+                policy_dir_arg = str(resolved)
+        spec = (config, policy_dir_arg, port)
 
         if self._policy_proc is not None and self._policy_proc.poll() is None:
             if self._policy_spec == spec:
@@ -465,12 +608,6 @@ class EvalGUI(QtWidgets.QMainWindow):
             extra_pythonpath.append(env["PYTHONPATH"])
         env["PYTHONPATH"] = os.pathsep.join(extra_pythonpath)
 
-        checkpoint_path = pathlib.Path(policy_dir)
-        if not policy_dir.startswith("gs://"):
-            resolved = checkpoint_path if checkpoint_path.is_absolute() else _REPO_ROOT / checkpoint_path
-            if not resolved.exists():
-                raise FileNotFoundError(f"checkpoint path does not exist: {resolved}")
-
         cmd = [
             *self._policy_python_cmd(),
             "scripts/serve_policy_pytorch.py",
@@ -484,9 +621,10 @@ class EvalGUI(QtWidgets.QMainWindow):
             "--policy.config",
             config,
             "--policy.dir",
-            policy_dir,
+            policy_dir_arg,
         ]
-        self._log_info(f"Starting local policy server: {config} -> {policy_dir}")
+        self._remember_checkpoint(mode=mode, path=policy_dir)
+        self._log_info(f"Starting local policy server: {config} -> {policy_dir_arg}")
         self._policy_proc = subprocess.Popen(cmd, cwd=str(_REPO_ROOT), env=env)
         self._policy_spec = spec
 
@@ -558,7 +696,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.lbl_mode_help.setText(_MODE_DESCRIPTIONS.get(mode, ""))
         with self._runtime._lock:
             self._runtime.mode = mode
-        self._set_policy_preset_for_mode(mode)
+        self._refresh_policy_fields_for_mode(mode, prefer_history=True)
         # Sensible default step interval per mode.
         defaults = {"traj": 6, "subgoal": 30, "subtask": 30}
         if mode in defaults:
@@ -571,6 +709,7 @@ class EvalGUI(QtWidgets.QMainWindow):
             self._log_error(f"Mode switch failed: {e}")
             return
         self._handler = handler
+        self._runtime.wake_subtask_waiters()
         self._runner.set_handler(handler)
 
     def _build_handler(self, mode: str) -> _modes.ModeHandler:
@@ -600,12 +739,13 @@ class EvalGUI(QtWidgets.QMainWindow):
             self._handler.set_step_interval(n)
 
     def _set_subtask(self, key: int) -> None:
-        if key not in self._runtime.subtask_labels:
+        with self._runtime._lock:
+            labels = dict(self._runtime.subtask_labels)
+        if key not in labels:
             self._log_error(f"key {key} not in subtask_labels")
             return
-        with self._runtime._lock:
-            self._runtime.subtask_key = key
-        label = self._runtime.subtask_labels[key]
+        self._runtime.set_subtask_key(key)
+        label = labels[key]
         self._log_info(f"subtask key={key} ({label})")
 
     def _on_connect(self) -> None:
@@ -701,7 +841,10 @@ class EvalGUI(QtWidgets.QMainWindow):
             self.lbl_subgoal.setPixmap(_np_to_qpixmap(sg, 480, 360))
 
         self.gb_subtask.setEnabled(snap["mode"] == "subtask")
-        self.lbl_active_key.setText(f"active: {snap['subtask_key']}")
+        active = f"active: {snap['subtask_key']}"
+        if snap.get("waiting_for_subtask_input"):
+            active += " (waiting)"
+        self.lbl_active_key.setText(active)
 
     # ------------------------------------------------------------------ #
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:        # noqa: N802

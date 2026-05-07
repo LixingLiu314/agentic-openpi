@@ -16,12 +16,30 @@ the on-wire observation matches what the **training** repack transforms produced
 
 ### Policy checkpoint selection
 
-The **Policy** row in the GUI chooses the checkpoint that matches the eval mode.
-Each preset fills `policy.config` and `policy.dir`, with a shared checkpoint
-step spinbox. With **start local server** checked, clicking **Connect** starts
-`scripts/serve_policy_pytorch.py` with that exact config/dir and then connects
-the runner to it. Uncheck it only when connecting to an already-running external
-policy server.
+The **Mode** dropdown owns the policy config. Switching modes automatically sets
+the matching `policy.config`:
+
+| GUI Mode  | Auto-selected `policy.config`              |
+|-----------|--------------------------------------------|
+| `basic`   | `pi05_aloha_banana`                        |
+| `traj`    | `pi05_aloha_banana_traj`                   |
+| `subtask` | `pi05_aloha_banana_subtask_segment`        |
+| `subgoal` | `pi05_aloha_banana_subgoal_base`           |
+
+The checkpoint field is an editable dropdown. You can type a `policy.dir`, pick
+one from the dropdown, use the step spinbox to generate the default checkpoint
+path for that mode, or click **Browse...** for a local checkpoint directory.
+Manually typed and browsed paths are remembered per mode in:
+
+```
+~/.cache/agentic-openpi/eval_gui_checkpoints.json
+```
+
+Set `AGENTIC_OPENPI_EVAL_GUI_HISTORY=/path/to/history.json` to use a different
+history file. With **start local server** checked, clicking **Connect** starts
+`scripts/serve_policy_pytorch.py` with the mode-selected config and the selected
+checkpoint path, then connects the runner to it. Uncheck it only when connecting
+to an already-running external policy server.
 
 ### Strict trajectory format (Mode 2)
 
@@ -57,6 +75,11 @@ subtask suggestion, ForeAct subgoal image) are fetched:
 `N` is the **step interval** spinbox (defaults: 6 for traj, 30 for subgoal,
 30 for subtask auto-suggest).
 
+For Mode 3 without an auto-suggest predictor, the "fresh external input" is an
+operator subtask selection. In blocking mode the loop waits at step 0 and then
+every `N` steps until you press/confirm a subtask key. Pressing the currently
+active key again counts as confirmation.
+
 ### Subtask labels (Mode 3)
 
 * Default key on init = **1**, with the canonical banana labels
@@ -64,6 +87,9 @@ subtask suggestion, ForeAct subgoal image) are fetched:
 * All four labels are **editable** in-place (just type & Enter).
 * You can also click *Load JSON…* to swap them at runtime; format:
   `{"1": "label_a", "2": "label_b", ...}`.
+* In blocking mode, press `1` / `2` / `3` / `4` to release the next blocked
+  subtask interval with that label. The runtime status shows `(waiting)` while
+  the inference loop is paused for operator input.
 * The `SubtaskPredictor` hook in `doubao_predictor.py` is reserved for a
   future Doubao-driven auto-suggest. The default impl is a no-op so it
   never overrides the human key.
@@ -156,6 +182,7 @@ The handlers reproduce — at inference time — the *post-repack* shape of
 * **Doubao timeout** — set `VOLCENKEY`; the prompt falls back to `task` only.
 * **ForeAct unreachable** — check `10.1.119.68:5100`; the run continues without
   a fresh subgoal image until ForeAct becomes reachable again.
-* **Train/eval mismatch** — check the GUI Policy row first, then open the latest
-  `debug_inputs/step_*/` folder and inspect `instruction.txt` against a training
-  sample. Whitespace matters, especially the two spaces after `<br/>`.
+* **Train/eval mismatch** — check the GUI Mode and checkpoint selector first,
+  then open the latest `debug_inputs/step_*/` folder and inspect
+  `instruction.txt` against a training sample. Whitespace matters, especially
+  the two spaces after `<br/>`.
