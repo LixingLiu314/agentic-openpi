@@ -173,5 +173,8 @@ aloha_lerobot_subtask_segment/
 .gitignore
 aloha_lerobot_subgoal_base/
 aloha_lerobot_subgoal_all/
-aloha_lerobot_traj/
+aloha_lerobot_traj_cot/
 aloha_lerobot_all_cot/
+aloha_cube/
+aloha_merged_banana_cube/
+traj_data/
