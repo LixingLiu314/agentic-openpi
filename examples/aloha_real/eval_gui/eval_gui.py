@@ -28,6 +28,11 @@ Keyboard:
 from __future__ import annotations
 
 import logging
+import os
+import pathlib
+import shutil
+import socket
+import subprocess
 import sys
 import time
 from typing import Optional
@@ -41,11 +46,36 @@ from .eval_runner import EvalRunner, RunnerConfig
 logger = logging.getLogger(__name__)
 
 
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+
 _MODE_DESCRIPTIONS = {
     "basic":   "Basic — VLA inference with task prompt only.",
     "traj":    "Add Trajectory — Doubao predicts L/R waypoints (loc-tokens).",
     "subtask": "Add Subtasks — keys 1/2/3/4 override the subtask label.",
     "subgoal": "Add Subgoal Images — ForeAct generates cam_high subgoal.",
+}
+
+_POLICY_PRESETS = {
+    "basic": {
+        "label": "basic - banana baseline",
+        "config": "pi05_aloha_banana",
+        "dir": "checkpoints/pi05_aloha_banana/banana_baseline/{step}",
+    },
+    "traj": {
+        "label": "traj - Doubao trajectory",
+        "config": "pi05_aloha_banana_traj",
+        "dir": "checkpoints/pi05_aloha_banana_traj/banana_traj_lr5e5/{step}",
+    },
+    "subtask": {
+        "label": "subtask - segment labels",
+        "config": "pi05_aloha_banana_subtask_segment",
+        "dir": "checkpoints/pi05_aloha_banana_subtask_segment/banana_subtask_seg_lr5e5/{step}",
+    },
+    "subgoal": {
+        "label": "subgoal - base camera",
+        "config": "pi05_aloha_banana_subgoal_base",
+        "dir": "checkpoints/pi05_aloha_banana_subgoal_base/banana_subgoal_base_lr5e5/{step}",
+    },
 }
 
 
@@ -81,6 +111,8 @@ class EvalGUI(QtWidgets.QMainWindow):
         self._runtime = runtime
         self._runner: Optional[EvalRunner] = None
         self._handler: Optional[_modes.ModeHandler] = None
+        self._policy_proc: Optional[subprocess.Popen] = None
+        self._policy_spec: Optional[tuple[str, str, int]] = None
         self._blocking = False
         self._step_interval = 6  # default for traj mode
 
@@ -116,7 +148,6 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.cb_mode = QtWidgets.QComboBox()
         for m in ("basic", "traj", "subtask", "subgoal"):
             self.cb_mode.addItem(m)
-        self.cb_mode.setCurrentText(self._runtime.mode)
         self.cb_mode.currentTextChanged.connect(self._on_mode_changed)
         mode_row.addWidget(self.cb_mode)
         self.lbl_mode_help = QtWidgets.QLabel(_MODE_DESCRIPTIONS[self._runtime.mode])
@@ -131,6 +162,35 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.le_task.editingFinished.connect(self._on_task_edited)
         task_row.addWidget(self.le_task, 1)
         left.addLayout(task_row)
+
+        # Policy checkpoint selection
+        policy_row = QtWidgets.QHBoxLayout()
+        policy_row.addWidget(QtWidgets.QLabel("Policy:"))
+        self.cb_policy = QtWidgets.QComboBox()
+        for key in ("basic", "traj", "subtask", "subgoal"):
+            self.cb_policy.addItem(_POLICY_PRESETS[key]["label"], key)
+        self.cb_policy.currentIndexChanged.connect(self._on_policy_preset_changed)
+        policy_row.addWidget(self.cb_policy, 1)
+        policy_row.addWidget(QtWidgets.QLabel("step:"))
+        self.sp_ckpt_step = QtWidgets.QSpinBox()
+        self.sp_ckpt_step.setRange(1, 10_000_000)
+        self.sp_ckpt_step.setSingleStep(500)
+        self.sp_ckpt_step.setValue(5000)
+        self.sp_ckpt_step.valueChanged.connect(self._on_policy_step_changed)
+        policy_row.addWidget(self.sp_ckpt_step)
+        self.cb_local_policy = QtWidgets.QCheckBox("start local server")
+        self.cb_local_policy.setChecked(True)
+        policy_row.addWidget(self.cb_local_policy)
+        left.addLayout(policy_row)
+
+        policy_path_row = QtWidgets.QHBoxLayout()
+        policy_path_row.addWidget(QtWidgets.QLabel("policy.config:"))
+        self.le_policy_config = QtWidgets.QLineEdit()
+        policy_path_row.addWidget(self.le_policy_config, 1)
+        policy_path_row.addWidget(QtWidgets.QLabel("policy.dir:"))
+        self.le_policy_dir = QtWidgets.QLineEdit()
+        policy_path_row.addWidget(self.le_policy_dir, 2)
+        left.addLayout(policy_path_row)
 
         # Server connection
         srv_row = QtWidgets.QHBoxLayout()
@@ -289,6 +349,11 @@ class EvalGUI(QtWidgets.QMainWindow):
         right.addLayout(wrist_row)
         right.addStretch(1)
 
+        old = self.cb_mode.blockSignals(True)
+        self.cb_mode.setCurrentText(self._runtime.mode)
+        self.cb_mode.blockSignals(old)
+        self._set_policy_preset_for_mode(self._runtime.mode)
+
     # ------------------------------------------------------------------ #
     # Logging
     def _log(self, level: str, msg: str) -> None:
@@ -321,6 +386,124 @@ class EvalGUI(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(int)
     def _on_step(self, n: int) -> None:
         self.lbl_step.setText(str(n))
+
+    # ------------------------------------------------------------------ #
+    def _selected_policy_key(self) -> str:
+        return self.cb_policy.currentData() or self._runtime.mode
+
+    def _set_policy_preset_for_mode(self, mode: str) -> None:
+        idx = self.cb_policy.findData(mode)
+        if idx >= 0:
+            old = self.cb_policy.blockSignals(True)
+            self.cb_policy.setCurrentIndex(idx)
+            self.cb_policy.blockSignals(old)
+        self._refresh_policy_fields()
+
+    def _refresh_policy_fields(self) -> None:
+        preset = _POLICY_PRESETS[self._selected_policy_key()]
+        step = int(self.sp_ckpt_step.value())
+        self.le_policy_config.setText(preset["config"])
+        self.le_policy_dir.setText(preset["dir"].format(step=step))
+
+    def _on_policy_preset_changed(self, *_) -> None:
+        self._refresh_policy_fields()
+
+    def _on_policy_step_changed(self, *_) -> None:
+        self._refresh_policy_fields()
+
+    def _policy_python_cmd(self) -> list[str]:
+        if sys.version_info >= (3, 11):
+            return [sys.executable]
+        uv = shutil.which("uv")
+        if uv is not None:
+            return [uv, "run", "python"]
+        return [sys.executable]
+
+    @staticmethod
+    def _port_is_open(host: str, port: int) -> bool:
+        try:
+            with socket.create_connection((host, port), timeout=0.25):
+                return True
+        except OSError:
+            return False
+
+    def _start_policy_server_if_needed(self) -> None:
+        if not self.cb_local_policy.isChecked():
+            return
+
+        config = self.le_policy_config.text().strip()
+        policy_dir = self.le_policy_dir.text().strip()
+        if not config or not policy_dir:
+            raise ValueError("policy.config and policy.dir are required when starting a local policy server")
+
+        port = int(self.le_port.text())
+        host = "127.0.0.1"
+        self.le_host.setText(host)
+        spec = (config, policy_dir, port)
+
+        if self._policy_proc is not None and self._policy_proc.poll() is None:
+            if self._policy_spec == spec:
+                return
+            self._stop_policy_server()
+        elif self._policy_proc is not None:
+            self._policy_proc = None
+            self._policy_spec = None
+
+        if self._port_is_open(host, port):
+            raise RuntimeError(
+                f"Port {port} is already in use. Stop the existing policy server, "
+                "choose another port, or uncheck 'start local server'."
+            )
+
+        env = os.environ.copy()
+        env["JAX_PLATFORMS"] = "cpu"
+        extra_pythonpath = [
+            str(_REPO_ROOT / "src"),
+            str(_REPO_ROOT / "packages" / "openpi-client" / "src"),
+        ]
+        if env.get("PYTHONPATH"):
+            extra_pythonpath.append(env["PYTHONPATH"])
+        env["PYTHONPATH"] = os.pathsep.join(extra_pythonpath)
+
+        checkpoint_path = pathlib.Path(policy_dir)
+        if not policy_dir.startswith("gs://"):
+            resolved = checkpoint_path if checkpoint_path.is_absolute() else _REPO_ROOT / checkpoint_path
+            if not resolved.exists():
+                raise FileNotFoundError(f"checkpoint path does not exist: {resolved}")
+
+        cmd = [
+            *self._policy_python_cmd(),
+            "scripts/serve_policy_pytorch.py",
+            "--env",
+            "ALOHA",
+            "--default-prompt",
+            self.le_task.text().strip() or self._runtime.task,
+            "--port",
+            str(port),
+            "policy:checkpoint",
+            "--policy.config",
+            config,
+            "--policy.dir",
+            policy_dir,
+        ]
+        self._log_info(f"Starting local policy server: {config} -> {policy_dir}")
+        self._policy_proc = subprocess.Popen(cmd, cwd=str(_REPO_ROOT), env=env)
+        self._policy_spec = spec
+
+    def _stop_policy_server(self) -> None:
+        proc = self._policy_proc
+        if proc is None:
+            return
+        if proc.poll() is None:
+            self._log_info("Stopping local policy server ...")
+            proc.terminate()
+            try:
+                proc.wait(timeout=10.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5.0)
+        self._policy_proc = None
+        self._policy_spec = None
 
     # ------------------------------------------------------------------ #
     def _on_task_edited(self) -> None:
@@ -362,9 +545,20 @@ class EvalGUI(QtWidgets.QMainWindow):
             self.subtask_inputs[k] = le
 
     def _on_mode_changed(self, mode: str) -> None:
+        if self._runner is not None and self.cb_local_policy.isChecked():
+            self._log_error(
+                "Stop the run before changing mode while using the local policy server, "
+                "so the matching checkpoint can be loaded."
+            )
+            old = self.cb_mode.blockSignals(True)
+            self.cb_mode.setCurrentText(self._runtime.mode)
+            self.cb_mode.blockSignals(old)
+            return
+
         self.lbl_mode_help.setText(_MODE_DESCRIPTIONS.get(mode, ""))
         with self._runtime._lock:
             self._runtime.mode = mode
+        self._set_policy_preset_for_mode(mode)
         # Sensible default step interval per mode.
         defaults = {"traj": 6, "subgoal": 30, "subtask": 30}
         if mode in defaults:
@@ -423,6 +617,10 @@ class EvalGUI(QtWidgets.QMainWindow):
             self._cfg.port = int(self.le_port.text())
             self._cfg.action_horizon = int(self.le_chunk.text())
             self._cfg.max_steps = int(self.le_max.text())
+            if self.cb_local_policy.isChecked():
+                self._start_policy_server_if_needed()
+                self._cfg.host = "127.0.0.1"
+                self.le_host.setText(self._cfg.host)
             self._handler = self._build_handler(self._runtime.mode)
             self._runner = EvalRunner(self._cfg, self._runtime, self._handler, on_event=self._on_event)
             self._runner.connect()
@@ -455,6 +653,8 @@ class EvalGUI(QtWidgets.QMainWindow):
         if self._runner is None:
             return
         self._runner.stop()
+        self._runner = None
+        self._handler = None
         # Clear all UI display fields so stale info is not shown.
         self.lbl_prompt.setText("(idle)")
         self.lbl_subtask.setText("-")
@@ -523,6 +723,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         try:
             if self._runner is not None:
                 self._runner.stop()
+            self._stop_policy_server()
         finally:
             super().closeEvent(event)
 

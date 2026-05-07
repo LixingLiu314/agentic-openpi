@@ -32,7 +32,7 @@ import json
 import logging
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import einops
 import numpy as np
@@ -386,37 +386,57 @@ class SubgoalMode(ModeHandler):
         self._update_every = max(1, int(n))
 
     # ------------------------------------------------------------------ #
+    def _predict_subgoal(self, cam: str, img: np.ndarray, task: str) -> Optional[np.ndarray]:
+        try:
+            return self._client.predict_subgoal(img, task)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("ForeAct request failed for %s; continuing without fresh subgoal: %s", cam, e)
+            if hasattr(self._client, "close"):
+                try:
+                    self._client.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            return None
+
+    def _store_subgoal(self, cam: str, sg: np.ndarray, runtime: RuntimeState) -> None:
+        with self._lock:
+            self._cache[cam] = sg
+            self._initialized = True
+        if cam == "cam_high":
+            with runtime._lock:
+                runtime.last_subgoal_image = sg
+
     def _do_request(self, raw_obs: Dict[str, Any], task: str, runtime: RuntimeState) -> None:
         """Synchronous ForeAct call; updates cache + runtime display."""
+        updated = False
         for cam in self._cameras:
             img = raw_obs["images"].get(cam)
             if img is None:
                 continue
-            sg = self._client.predict_subgoal(img, task)
+            sg = self._predict_subgoal(cam, img, task)
             if sg is None:
                 continue
+            self._store_subgoal(cam, sg, runtime)
+            updated = True
+        if not updated:
             with self._lock:
-                self._cache[cam] = sg
                 self._initialized = True
-            if cam == "cam_high":
-                with runtime._lock:
-                    runtime.last_subgoal_image = sg
 
     def _spawn_request(self, raw_obs: Dict[str, Any], task: str, runtime: RuntimeState) -> None:
         snapshots = {cam: raw_obs["images"][cam].copy() for cam in self._cameras
                      if cam in raw_obs["images"]}
 
         def _run() -> None:
+            updated = False
             for cam, img in snapshots.items():
-                sg = self._client.predict_subgoal(img, task)
+                sg = self._predict_subgoal(cam, img, task)
                 if sg is None:
                     continue
+                self._store_subgoal(cam, sg, runtime)
+                updated = True
+            if not updated:
                 with self._lock:
-                    self._cache[cam] = sg
                     self._initialized = True
-                if cam == "cam_high":
-                    with runtime._lock:
-                        runtime.last_subgoal_image = sg
 
         t = threading.Thread(target=_run, daemon=True, name="foreact-predict")
         t.start()
@@ -501,7 +521,6 @@ def make_handler(
 
         if foreact_client is None:
             foreact_client = ForeactClient(host=foreact_host, port=foreact_port)
-            foreact_client.connect()
         return SubgoalMode(
             client=foreact_client,
             update_every=subgoal_step_interval,

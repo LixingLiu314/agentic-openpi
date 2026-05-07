@@ -4,11 +4,11 @@
 # Usage:
 #   bash scripts/start_aloha_eval_gui.sh [--mode basic|traj|subtask|subgoal] [--host HOST] [--port PORT] [--task "TASK"]
 #
-# Pre-reqs (start in this order, in separate shells):
-#   1.  Policy server :     bash scripts/serve_banana.sh
+# Pre-reqs:
+#   1.  Robot stack (Piper ROS) — usually already running on this host.
 #   2.  ForeAct server (subgoal mode only) :
 #         on 10.1.119.68 ->  python server_foreact.py
-#   3.  Robot stack (Piper ROS) — usually already running on this host.
+#   3.  Policy server is started by the GUI when "start local server" is checked.
 #
 # Keyboard:  1/2/3/4 = subtask key (mode 3), Space = pause, H = 回零, Q = quit.
 

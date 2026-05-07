@@ -5,19 +5,15 @@ For each episode, new video files are created for subgoal camera streams.
 The subgoal for frame i is the frame at index min((i // SUBGOAL_WINDOW + 1) * SUBGOAL_WINDOW, last_frame),
 so frames 0-29 all share frame 30 as their subgoal, frames 30-59 share frame 60, etc.
 
-Two output versions are supported:
+Only the base-camera output is supported by the active training config:
   base  -- only cam_high_subgoal  (new dataset: aloha_lerobot_subgoal_base)
-  all   -- cam_high_subgoal + cam_left_wrist_subgoal + cam_right_wrist_subgoal
-           (new dataset: aloha_lerobot_subgoal_all)
 
 Usage:
-  uv run python scripts/preprocess_subgoal.py --version base
-  uv run python scripts/preprocess_subgoal.py --version all
-  uv run python scripts/preprocess_subgoal.py --version base --output_dir /custom/path
+  uv run python scripts/preprocess_subgoal.py
+  uv run python scripts/preprocess_subgoal.py --output_dir /custom/path
 
 After running, symlink the output directory into the HuggingFace cache:
   ln -sfn <output_dir> ~/.cache/huggingface/lerobot/lixing/aloha_banana_subgoal_base
-  ln -sfn <output_dir> ~/.cache/huggingface/lerobot/lixing/aloha_banana_subgoal_all
 
 Then start training:
   uv run torchrun ... scripts/train_pytorch.py pi05_aloha_banana_subgoal_base ...
@@ -27,7 +23,6 @@ import argparse
 import copy
 import json
 import pathlib
-import shutil
 
 import av
 import pandas as pd
@@ -43,26 +38,10 @@ SUBGOAL_WINDOW = 30
 NUM_EPISODES = 391
 
 SOURCE_CAMERAS = ["cam_high", "cam_left_wrist", "cam_right_wrist"]
-
-VERSION_CAMERAS = {
-    "base": ["cam_high"],
-    "all": ["cam_high", "cam_left_wrist", "cam_right_wrist"],
-}
-
-DEFAULT_OUTPUT_DIRS = {
-    "base": DATASET_DIR.parent / "aloha_lerobot_subgoal_base",
-    "all": DATASET_DIR.parent / "aloha_lerobot_subgoal_all",
-}
-
-REPO_IDS = {
-    "base": "lixing/aloha_banana_subgoal_base",
-    "all": "lixing/aloha_banana_subgoal_all",
-}
-
-TRAIN_CONFIGS = {
-    "base": "pi05_aloha_banana_subgoal_base",
-    "all": "pi05_aloha_banana_subgoal_all",
-}
+SUBGOAL_CAMERAS = ["cam_high"]
+DEFAULT_OUTPUT_DIR = DATASET_DIR.parent / "aloha_lerobot_subgoal_base"
+REPO_ID = "lixing/aloha_banana_subgoal_base"
+TRAIN_CONFIG = "pi05_aloha_banana_subgoal_base"
 
 
 def compute_subgoal_indices(total_frames: int) -> list[int]:
@@ -193,10 +172,8 @@ def setup_output_directory(output_dir: pathlib.Path, subgoal_cameras: list[str])
     print(f"Output directory ready: {output_dir}")
 
 
-def main(version: str, output_dir: pathlib.Path) -> None:
-    subgoal_cameras = VERSION_CAMERAS[version]
-
-    setup_output_directory(output_dir, subgoal_cameras)
+def main(output_dir: pathlib.Path) -> None:
+    setup_output_directory(output_dir, SUBGOAL_CAMERAS)
 
     out_video_chunk = output_dir / "videos" / "chunk-000"
 
@@ -208,7 +185,7 @@ def main(version: str, output_dir: pathlib.Path) -> None:
 
         subgoal_indices = compute_subgoal_indices(total_frames)
 
-        for cam in subgoal_cameras:
+        for cam in SUBGOAL_CAMERAS:
             src_video = VIDEO_DIR / f"observation.images.{cam}" / f"episode_{ep_idx:06d}.mp4"
             dst_video = out_video_chunk / f"observation.images.{cam}_subgoal" / f"episode_{ep_idx:06d}.mp4"
 
@@ -221,40 +198,32 @@ def main(version: str, output_dir: pathlib.Path) -> None:
         if ep_idx % 20 == 0:
             print(f"  episode {ep_idx:3d}/{NUM_EPISODES - 1}")
 
-    repo_id = REPO_IDS[version]
-    train_cfg = TRAIN_CONFIGS[version]
     hf_cache = (
         pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/.cache/huggingface/lerobot")
         / "lixing"
-        / repo_id.split("/")[1]
+        / REPO_ID.split("/")[1]
     )
 
-    print(f"\nDone.")
-    print(f"Version         : {version}")
-    print(f"Subgoal cameras : {subgoal_cameras}")
+    print("\nDone.")
+    print("Version         : base")
+    print(f"Subgoal cameras : {SUBGOAL_CAMERAS}")
     print(f"Output directory: {output_dir}")
     print()
     print("Next steps:")
     print(f"  ln -sfn {output_dir} {hf_cache}")
-    print(f"  uv run torchrun --nproc_per_node=<N> scripts/train_pytorch.py {train_cfg} \\")
-    print(f"    --exp_name <run_name>")
+    print(f"  uv run torchrun --nproc_per_node=<N> scripts/train_pytorch.py {TRAIN_CONFIG} \\")
+    print("    --exp_name <run_name>")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess subgoal images for Aloha banana dataset.")
     parser.add_argument(
-        "--version",
-        choices=["base", "all"],
-        default="base",
-        help="base: only cam_high subgoal; all: all 3 cameras as subgoal",
-    )
-    parser.add_argument(
         "--output_dir",
         type=pathlib.Path,
         default=None,
-        help="Output directory (default: aloha_lerobot_subgoal_{version} next to base dataset)",
+        help="Output directory (default: aloha_lerobot_subgoal_base next to base dataset)",
     )
     args = parser.parse_args()
 
-    output_dir = args.output_dir or DEFAULT_OUTPUT_DIRS[args.version]
-    main(args.version, output_dir)
+    output_dir = args.output_dir or DEFAULT_OUTPUT_DIR
+    main(output_dir)

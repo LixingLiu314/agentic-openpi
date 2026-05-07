@@ -11,8 +11,17 @@ the on-wire observation matches what the **training** repack transforms produced
 |-----------|--------------------------------------------|------------------------------------------------------------------------------|
 | `basic`   | `pi05_aloha_banana`                        | nothing — `prompt = task`                                                    |
 | `traj`    | `pi05_aloha_banana_traj`                   | `prompt = "{task}, traj: Left: Go along ... Right: Go along <br/>  ..."`     |
-| `subtask` | `pi05_aloha_banana_subtask`                | `prompt = "{task}, subtask: {label}"`; label chosen by keys 1/2/3/4          |
-| `subgoal` | `pi05_aloha_banana_subgoal_base` / `_all`  | `subgoal_images = {"cam_high": HxWx3 uint8}` from ForeAct                    |
+| `subtask` | `pi05_aloha_banana_subtask_segment`        | `prompt = "{task}, subtask: {label}"`; label chosen by keys 1/2/3/4          |
+| `subgoal` | `pi05_aloha_banana_subgoal_base`           | `subgoal_images = {"cam_high": HxWx3 uint8}` from ForeAct                    |
+
+### Policy checkpoint selection
+
+The **Policy** row in the GUI chooses the checkpoint that matches the eval mode.
+Each preset fills `policy.config` and `policy.dir`, with a shared checkpoint
+step spinbox. With **start local server** checked, clicking **Connect** starts
+`scripts/serve_policy_pytorch.py` with that exact config/dir and then connects
+the runner to it. Uncheck it only when connecting to an already-running external
+policy server.
 
 ### Strict trajectory format (Mode 2)
 
@@ -61,20 +70,16 @@ subtask suggestion, ForeAct subgoal image) are fetched:
 
 ## Prerequisites
 
-1. **Policy server** matching the chosen mode:
-   ```bash
-   bash scripts/serve_banana.sh           # default port 8000
-   ```
+1. **Robot stack** (Piper ROS) up and homed.
 2. **ForeAct server** (only for `subgoal` mode), on `10.1.119.68`:
    ```bash
    python server_foreact.py
    ```
-3. **Robot stack** (Piper ROS) up and homed.
-4. **Doubao API key** (only for `traj` mode):
+3. **Doubao API key** (only for `traj` mode):
    ```bash
    export VOLCENKEY="<your-volc-ark-api-key>"
    ```
-5. **PyQt5**: `pip install PyQt5`.
+4. **PyQt5** available in the `uv run python` environment.
 
 ## Run
 
@@ -149,8 +154,8 @@ The handlers reproduce — at inference time — the *post-repack* shape of
 * **回零 button does nothing** — click *Connect* first; the env has to exist.
 * **Cameras black** — robot stack not running (no images on ROS topics).
 * **Doubao timeout** — set `VOLCENKEY`; the prompt falls back to `task` only.
-* **ForeAct unreachable** — check `10.1.119.68:5100`; mode falls back to no
-  subgoal images and the model degrades to `_base` policy behaviour.
-* **Train/eval mismatch** — open the latest `debug_inputs/step_*/` folder
-  and inspect `instruction.txt` against a training sample. Whitespace
-  matters, especially the two spaces after `<br/>`.
+* **ForeAct unreachable** — check `10.1.119.68:5100`; the run continues without
+  a fresh subgoal image until ForeAct becomes reachable again.
+* **Train/eval mismatch** — check the GUI Policy row first, then open the latest
+  `debug_inputs/step_*/` folder and inspect `instruction.txt` against a training
+  sample. Whitespace matters, especially the two spaces after `<br/>`.

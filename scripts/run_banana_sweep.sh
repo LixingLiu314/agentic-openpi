@@ -65,27 +65,22 @@ run_exp 1 "banana_subtask_segment" \
     pi05_aloha_banana_subtask_segment \
     --debug_steps 5
 
-# ── Experiment 2: freeze PaliGemma VLM, train action expert only ──────────────
-run_exp 2 "banana_subtask_seg_freeze_vlm" \
-    pi05_aloha_banana_subtask_segment_freeze_vlm \
-    --debug_steps 5
-
-# ── Experiment 3: LR = 1e-5 (lower than baseline 2.5e-5) ─────────────────────
-run_exp 3 "banana_subtask_seg_lr1e5" \
+# ── Experiment 2: LR = 1e-5 (lower than baseline 2.5e-5) ─────────────────────
+run_exp 2 "banana_subtask_seg_lr1e5" \
     pi05_aloha_banana_subtask_segment \
     --lr_schedule.peak_lr 1e-5 \
     --lr_schedule.decay_lr 1e-6 \
     --debug_steps 5
 
-# ── Experiment 4: LR = 5e-5 (higher than baseline 2.5e-5) ────────────────────
-run_exp 4 "banana_subtask_seg_lr5e5" \
+# ── Experiment 3: LR = 5e-5 (higher than baseline 2.5e-5) ────────────────────
+run_exp 3 "banana_subtask_seg_lr5e5" \
     pi05_aloha_banana_subtask_segment \
     --lr_schedule.peak_lr 5e-5 \
     --lr_schedule.decay_lr 5e-6 \
     --debug_steps 5
 
-# ── Experiment 5: 10k steps (2x baseline) ────────────────────────────────────
-run_exp 5 "banana_subtask_seg_10k" \
+# ── Experiment 4: 10k steps (2x baseline) ────────────────────────────────────
+run_exp 4 "banana_subtask_seg_10k" \
     pi05_aloha_banana_subtask_segment \
     --num_train_steps 10000 \
     --lr_schedule.decay_steps 10000 \
