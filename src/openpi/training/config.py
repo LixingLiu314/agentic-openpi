@@ -1153,9 +1153,9 @@ _CONFIGS = [
         save_interval=500,
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=500,
-            peak_lr=5e-5,
+            peak_lr=2.5e-5,
             decay_steps=5_000,
-            decay_lr=5e-6,
+            decay_lr=2.5e-6,
         ),
         policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
     ),
