@@ -495,7 +495,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.rb_block = QtWidgets.QRadioButton("blocking (every N steps)")
         self.bg_submode.addButton(self.rb_nonblock)
         self.bg_submode.addButton(self.rb_block)
-        self.rb_nonblock.toggled.connect(self._on_submode_changed)
+        self.rb_block.toggled.connect(self._on_submode_changed)
         sm_row.addWidget(self.rb_nonblock)
         sm_row.addWidget(self.rb_block)
         sm_row.addStretch(1)
@@ -507,8 +507,8 @@ class EvalGUI(QtWidgets.QMainWindow):
         sm_row.addWidget(self.sp_interval)
         left.addLayout(sm_row)
 
-        traj_source_box = QtWidgets.QGroupBox("Trajectory source (Mode 2)")
-        traj_source_row = QtWidgets.QHBoxLayout(traj_source_box)
+        self.gb_traj_source = QtWidgets.QGroupBox("Trajectory source (Mode 2 blocking)")
+        traj_source_row = QtWidgets.QHBoxLayout(self.gb_traj_source)
         traj_source_row.addWidget(QtWidgets.QLabel("During blocking steps:"))
         self.bg_traj_source = QtWidgets.QButtonGroup(self)
         self.rb_traj_doubao = QtWidgets.QRadioButton("Doubao API")
@@ -525,7 +525,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         )
         self.lbl_traj_source_note.setStyleSheet("color:#888;")
         traj_source_row.addWidget(self.lbl_traj_source_note)
-        left.addWidget(traj_source_box)
+        left.addWidget(self.gb_traj_source)
 
         # Run buttons
         btn_row = QtWidgets.QHBoxLayout()
@@ -665,7 +665,6 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.cb_mode.setCurrentText(self._runtime.mode)
         self.cb_mode.blockSignals(old)
         self._refresh_policy_fields_for_mode(self._runtime.mode, prefer_history=True)
-        self._update_traj_source_controls()
         self._update_traj_source_controls()
 
     # ------------------------------------------------------------------ #
@@ -1072,6 +1071,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         with self._runtime._lock:
             self._runtime.mode = mode
         self._refresh_policy_fields_for_mode(mode, prefer_history=True)
+        self._update_traj_source_controls()
         # Sensible default step interval per mode.
         defaults = {"traj": 60, "subgoal": 60, "subtask": 60}
         if mode in defaults:
@@ -1180,8 +1180,11 @@ class EvalGUI(QtWidgets.QMainWindow):
         self._log_info(f"Manual trajectory override {state}.")
 
     def _update_traj_source_controls(self) -> None:
-        enabled = self._runtime.mode == "traj"
+        enabled = self._runtime.mode == "traj" and self._blocking
+        self.gb_traj_source.setVisible(enabled)
+        self.gb_traj_source.setEnabled(enabled)
         for widget in (self.rb_traj_doubao, self.rb_traj_manual, self.lbl_traj_source_note):
+            widget.setVisible(enabled)
             widget.setEnabled(enabled)
 
     def _on_interval_changed(self, n: int) -> None:

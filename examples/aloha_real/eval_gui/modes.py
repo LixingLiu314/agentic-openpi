@@ -665,6 +665,8 @@ class SubgoalMode(ModeHandler):
         self._lock = threading.Lock()
         self._cache: Dict[str, np.ndarray] = {}     # camera_name -> HWC uint8
         self._inflight: Optional[threading.Thread] = None
+        self._last_blocking_control_step: Optional[int] = None
+        self._use_cached_once = False
 
     def reset(self) -> None:
         with self._lock:
@@ -672,12 +674,46 @@ class SubgoalMode(ModeHandler):
             self._initialized = False
             self._cache.clear()
             self._inflight = None
+            self._last_blocking_control_step = None
+            self._use_cached_once = False
 
     def set_blocking(self, blocking: bool) -> None:
         self._blocking = bool(blocking)
 
     def set_step_interval(self, n: int) -> None:
         self._update_every = max(1, int(n))
+
+    def before_control_step(
+        self,
+        raw_obs,
+        runtime,
+        loop_step: int,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> bool:
+        if not self._blocking:
+            return False
+        if loop_step != 0 and loop_step % self._update_every != 0:
+            return False
+
+        with self._lock:
+            if self._last_blocking_control_step == loop_step:
+                return False
+
+        if cancel_check is not None and cancel_check():
+            return False
+        cam_high = raw_obs["images"].get("cam_high")
+        if cam_high is None:
+            return False
+
+        with runtime._lock:
+            task = runtime.task
+
+        logger.info("Blocking subgoal mode waiting for fresh ForeAct subgoal at step %d", loop_step)
+        self._do_request(raw_obs, task, runtime)
+        with self._lock:
+            self._last_blocking_control_step = loop_step
+            self._use_cached_once = True
+        return True
 
     # ------------------------------------------------------------------ #
     def _predict_subgoal(self, cam: str, img: np.ndarray, task: str) -> Optional[np.ndarray]:
@@ -751,9 +787,21 @@ class SubgoalMode(ModeHandler):
             blocking = first_step or self._blocking   # force-block on step 0
             in_flight = self._inflight is not None and self._inflight.is_alive()
             cache_snapshot = dict(self._cache)
+            use_cached_once = self._use_cached_once
+            self._use_cached_once = False
 
         if should_request:
-            if blocking:
+            if self._blocking:
+                if not use_cached_once and not cache_snapshot:
+                    # Fallback for direct callers that bypass before_control_step().
+                    self._do_request(raw_obs, runtime.task, runtime)
+                    with self._lock:
+                        cache_snapshot = dict(self._cache)
+                elif use_cached_once:
+                    # The fresh subgoal was already fetched synchronously in
+                    # before_control_step(); just consume the cached result.
+                    pass
+            elif blocking:
                 # Synchronous fetch: callers pause here until the new
                 # subgoal arrives (or the request fails / times out).
                 # On first step this guarantees the robot never moves
