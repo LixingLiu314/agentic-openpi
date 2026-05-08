@@ -10,7 +10,7 @@ the on-wire observation matches what the **training** repack transforms produced
 | GUI Mode  | Training config                            | What the client adds to the obs                                              |
 |-----------|--------------------------------------------|------------------------------------------------------------------------------|
 | `basic`   | `pi05_aloha_banana`                        | nothing — `prompt = task`                                                    |
-| `traj`    | `pi05_aloha_banana_traj`                   | `prompt = "{task}, traj: Left: Go along ... Right: Go along <br/>  ..."`     |
+| `traj`    | `pi05_aloha_banana_traj`                   | `prompt = "{task}, traj: Left: Go along ... Right: Go along ..."`            |
 | `subtask` | `pi05_aloha_banana_subtask_segment`        | `prompt = "{task}, subtask: {label}"`; label chosen from the subtask list    |
 | `subgoal` | `pi05_aloha_banana_subgoal_base`           | `subgoal_images = {"cam_high": HxWx3 uint8}` from ForeAct                    |
 
@@ -51,15 +51,35 @@ Left: Go along (x,y), close gripper, (x,y). Right: Go along <br/>  (x,y), (x,y),
 
 and then runs the **same** `coords_to_loc_tokens` regex used by
 `scripts/preprocess_traj.py` to substitute every `(x,y)` for
-`<loc{x:04d}><loc{y:04d}>`. End-to-end the prompt becomes e.g.
+`<loc{x:04d}><loc{y:04d}>`. Before sending the prompt to the VLA, any
+`<br>` / `<br/>` separators are replaced with plain spaces while preserving all
+`<locXXXX>` tokens. End-to-end the prompt becomes e.g.
 
 ```
 put banana in the green plate, traj: Left: Go along <loc0000><loc0554>.
-Right: Go along <br/>  <loc0980><loc0627>, <loc1000><loc0533>, close gripper, <loc0714><loc0271>
+Right: Go along <loc0980><loc0627>, <loc1000><loc0533>, close gripper, <loc0714><loc0271>
 ```
 
-The `<br/>` and the **two spaces** that follow it are intentional and match
-the training corpus byte-for-byte.
+The internal parser can still consume older trajectory strings that contain
+`<br/>`; the final VLA prompt is cleaned so HTML break tags do not leak into the
+model input.
+
+When Mode 2 receives a Doubao trajectory, the GUI parses the resulting
+`<locXXXX><locYYYY>` points, projects them onto `cam_high`, and shows the
+annotated image in the main camera panel. Left-arm points are drawn in magenta;
+right-arm points are drawn in yellow/green/red/blue.
+
+In Mode 2, the **Trajectory source (Mode 2)** selector chooses what happens
+during blocking refresh steps: **Doubao API** calls the API, while **Manual
+Annotation** opens an operator annotation dialog. The dialog is implemented with
+native PyQt5 widgets (`QDialog`, `QLabel`/`QPixmap`, and `QPushButton`) rather
+than OpenCV GUI calls. It shows the current `cam_high` frame. Select **L (Left
+Arm)** or **R (Right Arm)**, click image points to add
+`<locXXXX><locYYYY>` waypoints, insert **Open Gripper** or **Close Gripper**
+actions as needed, and press **Finish**. The generated text is cached exactly
+like a Doubao result and uses the same per-arm loc-token ordering. Press
+**Emergency Stop** to discard the annotation, pause inference, and queue the
+existing return-to-zero path.
 
 ### Sub-modes (modes 2 / 3 / 4)
 
@@ -72,8 +92,7 @@ subtask suggestion, ForeAct subgoal image) are fetched:
 * **blocking** — every `N` steps the control loop pauses and waits for a
   fresh external input before continuing.
 
-`N` is the **step interval** spinbox (defaults: 6 for traj, 30 for subgoal,
-30 for subtask auto-suggest).
+`N` is the **step interval** spinbox (default: 60).
 
 For Mode 3 without an auto-suggest predictor, the "fresh external input" is an
 operator subtask selection. In blocking mode the loop waits at step 0 and then
@@ -141,7 +160,8 @@ only for hardware calibration/debugging.
    ```bash
    python server_foreact.py
    ```
-3. **Doubao API key** (only for `traj` mode):
+3. **Doubao API key** (for API-driven `traj` mode; not needed when using
+   **Manual Annotation** for Mode 2 blocking runs):
    ```bash
    export VOLCENKEY="<your-volc-ark-api-key>"
    ```
@@ -225,5 +245,6 @@ The handlers reproduce — at inference time — the *post-repack* shape of
   a fresh subgoal image until ForeAct becomes reachable again.
 * **Train/eval mismatch** — check the GUI Mode and checkpoint selector first,
   then open the latest `debug_inputs/step_*/` folder and inspect
-  `instruction.txt` against a training sample. Whitespace matters, especially
-  the two spaces after `<br/>`.
+  `instruction.txt` against a training sample. Mode 2 prompts should contain
+  clean text and `<locXXXX>` tokens only; `<br>` / `<br/>` tags are stripped
+  before the prompt is sent.

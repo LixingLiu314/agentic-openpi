@@ -36,6 +36,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 from typing import Optional
 
@@ -44,6 +45,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 from . import modes as _modes
 from .eval_runner import EvalRunner, RunnerConfig
+from .manual_trajectory import build_manual_prediction, pixel_to_loc_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +99,243 @@ def _np_to_qpixmap(img_hwc_rgb: Optional[np.ndarray], target_w: int, target_h: i
     return pm.scaled(target_w, target_h, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
 
 
+class _ManualTrajectoryRequest:
+    """Thread handoff object used by the runner to request a GUI annotation."""
+
+    def __init__(self, image: np.ndarray, task: str) -> None:
+        self.image = image
+        self.task = task
+        self.done = threading.Event()
+        self.prediction = None
+        self.cancel_requested = False
+
+    def set_prediction(self, prediction) -> None:
+        if self.done.is_set():
+            return
+        self.prediction = prediction
+        self.done.set()
+
+    def cancel(self) -> None:
+        self.cancel_requested = True
+        self.done.set()
+
+
+class _TrajectoryImageLabel(QtWidgets.QLabel):
+    image_clicked = QtCore.pyqtSignal(float, float)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._source_image: Optional[np.ndarray] = None
+        self.setMinimumSize(720, 540)
+        self.setAlignment(QtCore.Qt.AlignCenter)
+        self.setStyleSheet("background:#111;")
+        self.setMouseTracking(True)
+
+    def set_source_image(self, image: np.ndarray) -> None:
+        self._source_image = image
+        self._refresh_pixmap()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._refresh_pixmap()
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        if event.button() != QtCore.Qt.LeftButton or self._source_image is None:
+            return
+        rect = self._image_rect()
+        if rect is None or not rect.contains(event.pos()):
+            return
+        h, w = self._source_image.shape[:2]
+        x = (event.x() - rect.x()) / max(1.0, rect.width() - 1.0) * max(0, w - 1)
+        y = (event.y() - rect.y()) / max(1.0, rect.height() - 1.0) * max(0, h - 1)
+        self.image_clicked.emit(float(x), float(y))
+
+    def _image_rect(self) -> Optional[QtCore.QRectF]:
+        if self._source_image is None:
+            return None
+        h, w = self._source_image.shape[:2]
+        if h <= 0 or w <= 0 or self.width() <= 0 or self.height() <= 0:
+            return None
+        scale = min(self.width() / float(w), self.height() / float(h))
+        disp_w = w * scale
+        disp_h = h * scale
+        x0 = (self.width() - disp_w) / 2.0
+        y0 = (self.height() - disp_h) / 2.0
+        return QtCore.QRectF(x0, y0, disp_w, disp_h)
+
+    def _refresh_pixmap(self) -> None:
+        if self._source_image is None or self.width() <= 0 or self.height() <= 0:
+            return
+        self.setPixmap(_np_to_qpixmap(self._source_image, self.width(), self.height()))
+
+
+class ManualTrajectoryDialog(QtWidgets.QDialog):
+    """Modal trajectory annotation dialog shown on the Qt main thread."""
+
+    def __init__(self, image: np.ndarray, task: str, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Manual Trajectory Annotation")
+        self.setModal(True)
+        self.resize(980, 760)
+
+        arr = np.asarray(image)
+        if arr.dtype != np.uint8:
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+        self._base_image = arr.copy()
+        self._active_arm = "left"
+        self._items: dict[str, list[str]] = {"left": [], "right": []}
+        self._history: list[tuple[str, str]] = []
+        self._prediction = None
+        self._force_close = False
+        self._aborted = False
+
+        root = QtWidgets.QVBoxLayout(self)
+        self.lbl_task = QtWidgets.QLabel(f"Task: {task}")
+        self.lbl_task.setWordWrap(True)
+        root.addWidget(self.lbl_task)
+
+        self.image_label = _TrajectoryImageLabel(self)
+        self.image_label.set_source_image(self._base_image)
+        self.image_label.image_clicked.connect(self._on_image_clicked)
+        root.addWidget(self.image_label, 1)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        self.bg_arm = QtWidgets.QButtonGroup(self)
+        self.btn_left = QtWidgets.QPushButton("L (Left Arm)")
+        self.btn_left.setCheckable(True)
+        self.btn_left.setChecked(True)
+        self.btn_right = QtWidgets.QPushButton("R (Right Arm)")
+        self.btn_right.setCheckable(True)
+        self.bg_arm.addButton(self.btn_left)
+        self.bg_arm.addButton(self.btn_right)
+        self.btn_left.clicked.connect(lambda: self._set_active_arm("left"))
+        self.btn_right.clicked.connect(lambda: self._set_active_arm("right"))
+        btn_row.addWidget(self.btn_left)
+        btn_row.addWidget(self.btn_right)
+
+        self.btn_open = QtWidgets.QPushButton("Open Gripper")
+        self.btn_open.clicked.connect(lambda: self._append_item("open gripper"))
+        btn_row.addWidget(self.btn_open)
+        self.btn_close = QtWidgets.QPushButton("Close Gripper")
+        self.btn_close.clicked.connect(lambda: self._append_item("close gripper"))
+        btn_row.addWidget(self.btn_close)
+        self.btn_undo = QtWidgets.QPushButton("Clear/Undo")
+        self.btn_undo.setToolTip("Remove the most recent point or gripper action.")
+        self.btn_undo.clicked.connect(self._undo_last)
+        btn_row.addWidget(self.btn_undo)
+        btn_row.addStretch(1)
+        self.btn_abort = QtWidgets.QPushButton("Emergency Stop")
+        self.btn_abort.setToolTip("Discard this annotation, pause inference, and queue return-to-zero.")
+        self.btn_abort.setStyleSheet(
+            "background:#b00020;color:#fff;font-weight:bold;padding:8px;"
+        )
+        self.btn_abort.clicked.connect(self._abort)
+        btn_row.addWidget(self.btn_abort)
+        self.btn_finish = QtWidgets.QPushButton("Finish")
+        self.btn_finish.clicked.connect(self._finish)
+        btn_row.addWidget(self.btn_finish)
+        root.addLayout(btn_row)
+
+        self.lbl_sequence = QtWidgets.QLabel("")
+        self.lbl_sequence.setWordWrap(True)
+        self.lbl_sequence.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        root.addWidget(self.lbl_sequence)
+        self._refresh_sequence()
+
+    @property
+    def prediction(self):
+        return self._prediction
+
+    @property
+    def aborted(self) -> bool:
+        return self._aborted
+
+    def reject(self) -> None:
+        if self._force_close:
+            super().reject()
+            return
+        QtWidgets.QApplication.beep()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        if self.result() == QtWidgets.QDialog.Accepted or self._force_close:
+            super().closeEvent(event)
+            return
+        event.ignore()
+        QtWidgets.QApplication.beep()
+
+    def cancel_from_runner(self) -> None:
+        self._force_close = True
+        super().reject()
+
+    def _abort(self) -> None:
+        self._prediction = None
+        self._aborted = True
+        self._force_close = True
+        super().reject()
+
+    def _set_active_arm(self, arm: str) -> None:
+        self._active_arm = arm
+        self.btn_left.setChecked(arm == "left")
+        self.btn_right.setChecked(arm == "right")
+        self._refresh_sequence()
+
+    def _on_image_clicked(self, x: float, y: float) -> None:
+        h, w = self._base_image.shape[:2]
+        token = pixel_to_loc_tokens(x, y, w, h)
+        self._append_item(token)
+
+    def _append_item(self, item: str) -> None:
+        arm = self._active_arm
+        self._items[arm].append(item)
+        self._history.append((arm, item))
+        self._refresh_preview()
+        self._refresh_sequence()
+
+    def _undo_last(self) -> None:
+        if not self._history:
+            return
+        arm, item = self._history.pop()
+        if self._items[arm] and self._items[arm][-1] == item:
+            self._items[arm].pop()
+        elif item in self._items[arm]:
+            self._items[arm].remove(item)
+        self._refresh_preview()
+        self._refresh_sequence()
+
+    def _finish(self) -> None:
+        if not self._items["left"] or not self._items["right"]:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Missing Trajectory",
+                "Add at least one point or gripper action for both arms before finishing.",
+            )
+            return
+        self._prediction = build_manual_prediction(self._items["left"], self._items["right"])
+        self.accept()
+
+    def _trajectory_text(self) -> str:
+        return build_manual_prediction(self._items["left"], self._items["right"]).to_loc_token_text()
+
+    def _refresh_preview(self) -> None:
+        if not self._history:
+            self.image_label.set_source_image(self._base_image)
+            return
+        try:
+            from .trajectory_visualizer import render_trajectory_overlay
+
+            self.image_label.set_source_image(render_trajectory_overlay(self._base_image, self._trajectory_text()))
+        except Exception as e:                       # noqa: BLE001
+            logger.warning("Manual trajectory preview failed: %s", e)
+            self.image_label.set_source_image(self._base_image)
+
+    def _refresh_sequence(self) -> None:
+        left = ", ".join(self._items["left"]) or "-"
+        right = ", ".join(self._items["right"]) or "-"
+        self.lbl_sequence.setText(
+            f"Active: {self._active_arm.upper()}    Left: {left}    Right: {right}"
+        )
+
+
 class _EventBridge(QtCore.QObject):
     """Marshals events from the runner thread onto the Qt main thread."""
 
@@ -107,6 +346,8 @@ class _EventBridge(QtCore.QObject):
     mode_changed = QtCore.pyqtSignal(str)
     episode_start = QtCore.pyqtSignal()
     episode_end = QtCore.pyqtSignal(int)
+    manual_trajectory = QtCore.pyqtSignal(object)
+    manual_trajectory_cancel = QtCore.pyqtSignal(object)
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +361,9 @@ class EvalGUI(QtWidgets.QMainWindow):
         self._policy_proc: Optional[subprocess.Popen] = None
         self._policy_spec: Optional[tuple[str, str, int]] = None
         self._blocking = False
-        self._step_interval = 6  # default for traj mode
+        self._step_interval = 60
+        self._manual_traj_dialog: Optional[ManualTrajectoryDialog] = None
+        self._manual_traj_request: Optional[_ManualTrajectoryRequest] = None
         self._checkpoint_history_path = self._checkpoint_history_file()
         self._checkpoint_history: dict[str, list[str]] = {key: [] for key in _POLICY_PRESETS}
         self._last_checkpoint_by_mode: dict[str, str] = {}
@@ -135,6 +378,8 @@ class EvalGUI(QtWidgets.QMainWindow):
         self._bridge.mode_changed.connect(lambda m: self._log_info(f"Mode -> {m}"))
         self._bridge.episode_start.connect(lambda: self._log_info("Episode started"))
         self._bridge.episode_end.connect(lambda n: self._log_info(f"Episode ended after {n} steps"))
+        self._bridge.manual_trajectory.connect(self._on_manual_trajectory_requested)
+        self._bridge.manual_trajectory_cancel.connect(self._on_manual_trajectory_cancel)
 
         self.setWindowTitle("Aloha Eval — agentic-openpi")
         self._build_ui()
@@ -262,6 +507,26 @@ class EvalGUI(QtWidgets.QMainWindow):
         sm_row.addWidget(self.sp_interval)
         left.addLayout(sm_row)
 
+        traj_source_box = QtWidgets.QGroupBox("Trajectory source (Mode 2)")
+        traj_source_row = QtWidgets.QHBoxLayout(traj_source_box)
+        traj_source_row.addWidget(QtWidgets.QLabel("During blocking steps:"))
+        self.bg_traj_source = QtWidgets.QButtonGroup(self)
+        self.rb_traj_doubao = QtWidgets.QRadioButton("Doubao API")
+        self.rb_traj_manual = QtWidgets.QRadioButton("Manual Annotation")
+        self.rb_traj_doubao.setChecked(True)
+        self.bg_traj_source.addButton(self.rb_traj_doubao)
+        self.bg_traj_source.addButton(self.rb_traj_manual)
+        self.rb_traj_manual.toggled.connect(self._on_manual_traj_override_changed)
+        traj_source_row.addWidget(self.rb_traj_doubao)
+        traj_source_row.addWidget(self.rb_traj_manual)
+        traj_source_row.addStretch(1)
+        self.lbl_traj_source_note = QtWidgets.QLabel(
+            "Manual Annotation opens the native PyQt5 popup instead of calling Doubao."
+        )
+        self.lbl_traj_source_note.setStyleSheet("color:#888;")
+        traj_source_row.addWidget(self.lbl_traj_source_note)
+        left.addWidget(traj_source_box)
+
         # Run buttons
         btn_row = QtWidgets.QHBoxLayout()
         self.btn_start = QtWidgets.QPushButton("▶ Start")
@@ -368,7 +633,8 @@ class EvalGUI(QtWidgets.QMainWindow):
         right = QtWidgets.QVBoxLayout()
         root.addLayout(right, 2)
 
-        right.addWidget(QtWidgets.QLabel("cam_high (live)"))
+        self.lbl_cam_title = QtWidgets.QLabel("cam_high (live)")
+        right.addWidget(self.lbl_cam_title)
         self.lbl_cam = QtWidgets.QLabel()
         self.lbl_cam.setMinimumSize(480, 360)
         self.lbl_cam.setStyleSheet("background:#111;")
@@ -399,6 +665,8 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.cb_mode.setCurrentText(self._runtime.mode)
         self.cb_mode.blockSignals(old)
         self._refresh_policy_fields_for_mode(self._runtime.mode, prefer_history=True)
+        self._update_traj_source_controls()
+        self._update_traj_source_controls()
 
     # ------------------------------------------------------------------ #
     # Logging
@@ -805,7 +1073,7 @@ class EvalGUI(QtWidgets.QMainWindow):
             self._runtime.mode = mode
         self._refresh_policy_fields_for_mode(mode, prefer_history=True)
         # Sensible default step interval per mode.
-        defaults = {"traj": 6, "subgoal": 30, "subtask": 30}
+        defaults = {"traj": 60, "subgoal": 60, "subtask": 60}
         if mode in defaults:
             self.sp_interval.setValue(defaults[mode])
         if self._runner is None:
@@ -828,17 +1096,93 @@ class EvalGUI(QtWidgets.QMainWindow):
         n = int(self.sp_interval.value())
         if mode == "traj":
             kwargs["traj_step_interval"] = n
+            kwargs["manual_traj_provider"] = self._request_manual_trajectory
+            kwargs["manual_traj_override"] = self._manual_traj_override_enabled()
         elif mode == "subgoal":
             kwargs["subgoal_step_interval"] = n
         elif mode == "subtask":
             kwargs["subtask_step_interval"] = n
         return _modes.make_handler(mode, **kwargs)
 
+    def _manual_traj_override_enabled(self) -> bool:
+        return bool(getattr(self, "rb_traj_manual", None) and self.rb_traj_manual.isChecked())
+
+    def _request_manual_trajectory(self, image: np.ndarray, task: str, cancel_check=None):
+        req = _ManualTrajectoryRequest(image.copy(), task)
+        self._bridge.manual_trajectory.emit(req)
+        while not req.done.wait(timeout=0.1):
+            if cancel_check is not None and cancel_check():
+                req.cancel_requested = True
+                self._bridge.manual_trajectory_cancel.emit(req)
+                req.cancel()
+                return None
+        if req.cancel_requested:
+            return None
+        return req.prediction
+
+    @QtCore.pyqtSlot(object)
+    def _on_manual_trajectory_requested(self, req: _ManualTrajectoryRequest) -> None:
+        if req.cancel_requested:
+            req.cancel()
+            return
+
+        dialog = ManualTrajectoryDialog(req.image, req.task, self)
+        self._manual_traj_request = req
+        self._manual_traj_dialog = dialog
+        self._log_info("Manual trajectory annotation requested.")
+        try:
+            result = dialog.exec_()
+            if req.cancel_requested:
+                req.cancel()
+            elif result == QtWidgets.QDialog.Accepted and dialog.prediction is not None:
+                req.set_prediction(dialog.prediction)
+                self._log_info("Manual trajectory annotation finished.")
+            elif dialog.aborted:
+                req.cancel()
+                self._handle_manual_trajectory_abort()
+            else:
+                req.cancel()
+        finally:
+            if self._manual_traj_request is req:
+                self._manual_traj_request = None
+                self._manual_traj_dialog = None
+
+    @QtCore.pyqtSlot(object)
+    def _on_manual_trajectory_cancel(self, req: _ManualTrajectoryRequest) -> None:
+        if self._manual_traj_request is not req or self._manual_traj_dialog is None:
+            return
+        self._manual_traj_dialog.cancel_from_runner()
+
+    def _handle_manual_trajectory_abort(self) -> None:
+        runner = self._runner
+        if runner is None:
+            return
+        runner.pause()
+        runner.request_reset()
+        self.btn_pause.setText("▶ Resume")
+        self._log_error("Manual trajectory emergency stop: annotation discarded, inference paused, RTZ queued.")
+
     def _on_submode_changed(self, *_) -> None:
         self._blocking = self.rb_block.isChecked()
         if self._handler is not None:
             self._handler.set_blocking(self._blocking)
+        self._update_traj_source_controls()
         self._log_info(f"sub-mode -> {'blocking' if self._blocking else 'non-blocking'}")
+
+    def _on_manual_traj_override_changed(self, enabled: bool) -> None:
+        manual_enabled = bool(enabled)
+        with self._runtime._lock:
+            self._runtime.manual_traj_override = manual_enabled
+        if self._handler is not None:
+            self._handler.set_manual_trajectory_provider(self._request_manual_trajectory)
+            self._handler.set_manual_trajectory_override(manual_enabled)
+        state = "enabled" if manual_enabled else "disabled"
+        self._log_info(f"Manual trajectory override {state}.")
+
+    def _update_traj_source_controls(self) -> None:
+        enabled = self._runtime.mode == "traj"
+        for widget in (self.rb_traj_doubao, self.rb_traj_manual, self.lbl_traj_source_note):
+            widget.setEnabled(enabled)
 
     def _on_interval_changed(self, n: int) -> None:
         self._step_interval = int(n)
@@ -939,15 +1283,22 @@ class EvalGUI(QtWidgets.QMainWindow):
 
     # ------------------------------------------------------------------ #
     def _refresh_ui(self) -> None:
+        snap = self._runtime.snapshot()
         if self._runner is not None:
             obs = self._runner.latest_obs()
             if obs is not None:
                 images = obs.get("images", {})
-                self.lbl_cam.setPixmap(_np_to_qpixmap(images.get("cam_high"), 480, 360))
+                cam_high = images.get("cam_high")
+                traj_image = snap.get("traj_image")
+                if snap.get("mode") == "traj" and traj_image is not None:
+                    cam_high = traj_image
+                    self.lbl_cam_title.setText("cam_high (Mode 2 trajectory overlay)")
+                else:
+                    self.lbl_cam_title.setText("cam_high (live)")
+                self.lbl_cam.setPixmap(_np_to_qpixmap(cam_high, 480, 360))
                 self.lbl_left.setPixmap(_np_to_qpixmap(images.get("cam_left_wrist"), 220, 165))
                 self.lbl_right.setPixmap(_np_to_qpixmap(images.get("cam_right_wrist"), 220, 165))
 
-        snap = self._runtime.snapshot()
         self.lbl_prompt.setText(snap["prompt"] or "(empty)")
         self.lbl_subtask.setText(snap["subtask_label"] or "-")
         traj = snap["traj_text"] or "-"

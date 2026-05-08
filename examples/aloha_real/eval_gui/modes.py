@@ -10,8 +10,8 @@ That means the handler must do the work of those repack transforms itself:
 
   * basic   -- raw {state, images}; server uses ``--default-prompt``.
   * traj    -- prompt = ``"<task>, traj: Left: Go along ... Right: Go along
-               <br/>  ..."`` (mirrors ``_transforms.AppendTrajCotToPrompt``
-               + the canonical ``cot_text_prompts.json`` format).
+               ..."`` with any ``<br>`` separators stripped before sending to
+               the VLA.
   * subtask -- prompt = ``"<task>, subtask: <label>"`` (mirrors
                ``_transforms.AppendSubtaskToPrompt`` exactly). Labels are
                user-editable and the keys 1..4 select among them.
@@ -30,7 +30,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -39,6 +41,9 @@ import numpy as np
 from openpi_client import image_tools
 
 logger = logging.getLogger(__name__)
+
+
+_BR_TAG_RE = re.compile(r"<\s*br\s*/?\s*>", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +65,12 @@ def to_chw_uint8(img_hwc_rgb: np.ndarray, h: int = 224, w: int = 224) -> np.ndar
     return einops.rearrange(img, "h w c -> c h w")
 
 
+def clean_trajectory_prompt_text(loc_token_text: str) -> str:
+    """Remove HTML break tags while preserving Paligemma ``<locXXXX>`` tokens."""
+    text = _BR_TAG_RE.sub(" ", loc_token_text or "")
+    return re.sub(r"\s+", " ", text).strip()
+
+
 # ---------------------------------------------------------------------------
 @dataclass
 class RuntimeState:
@@ -78,6 +89,8 @@ class RuntimeState:
     last_prompt: str = ""
     last_subtask_label: str = ""
     last_traj_text: str = ""
+    last_traj_image: Optional[np.ndarray] = None       # HWC uint8 RGB with trajectory overlay
+    manual_traj_override: bool = False
     last_subgoal_image: Optional[np.ndarray] = None    # HWC uint8 RGB
     waiting_for_subtask_input: bool = False
 
@@ -180,6 +193,7 @@ class RuntimeState:
             self.last_prompt = ""
             self.last_subtask_label = ""
             self.last_traj_text = ""
+            self.last_traj_image = None
             self.last_subgoal_image = None
             self.waiting_for_subtask_input = False
             self.subtask_wake_seq += 1
@@ -195,6 +209,8 @@ class RuntimeState:
                 "subtask_labels": dict(self.subtask_labels),
                 "prompt": self.last_prompt,
                 "traj_text": self.last_traj_text,
+                "traj_image": self.last_traj_image,
+                "manual_traj_override": self.manual_traj_override,
                 "subgoal_image": self.last_subgoal_image,
                 "waiting_for_subtask_input": self.waiting_for_subtask_input,
             }
@@ -232,6 +248,12 @@ class ModeHandler:
         ...
 
     def set_step_interval(self, n: int) -> None:
+        ...
+
+    def set_manual_trajectory_provider(self, provider: Optional[Callable[..., Any]]) -> None:
+        ...
+
+    def set_manual_trajectory_override(self, enabled: bool) -> None:
         ...
 
     @staticmethod
@@ -441,17 +463,31 @@ class SubtaskMode(ModeHandler):
 
 # ---------------------------------------------------------------------------
 class TrajectoryMode(ModeHandler):
-    """Mode 2: prompt = f"{task}, traj: <strict L/R loc-token text>"."""
+    """Mode 2: prompt = f"{task}, traj: <clean L/R loc-token text>"."""
 
     name = "traj"
 
-    def __init__(self, predictor) -> None:
+    def __init__(
+        self,
+        predictor,
+        *,
+        manual_provider: Optional[Callable[..., Any]] = None,
+        manual_override: bool = False,
+    ) -> None:
         from .doubao_predictor import CachedTrajectoryPredictor  # local import
 
         self._predictor: CachedTrajectoryPredictor = predictor
+        self._lock = threading.Lock()
+        self._last_blocking_control_step: Optional[int] = None
+        self._use_cached_once = False
+        self._manual_provider = manual_provider
+        self._manual_override = bool(manual_override)
 
     def reset(self) -> None:
         self._predictor.reset()
+        with self._lock:
+            self._last_blocking_control_step = None
+            self._use_cached_once = False
 
     def set_blocking(self, blocking: bool) -> None:
         self._predictor.set_blocking(blocking)
@@ -459,21 +495,131 @@ class TrajectoryMode(ModeHandler):
     def set_step_interval(self, n: int) -> None:
         self._predictor.set_update_every(n)
 
+    def set_manual_trajectory_provider(self, provider: Optional[Callable[..., Any]]) -> None:
+        with self._lock:
+            self._manual_provider = provider
+
+    def set_manual_trajectory_override(self, enabled: bool) -> None:
+        with self._lock:
+            self._manual_override = bool(enabled)
+
+    def before_control_step(
+        self,
+        raw_obs,
+        runtime,
+        loop_step: int,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> bool:
+        if not self._predictor.blocking:
+            return False
+        update_every = self._predictor.update_every
+        if loop_step != 0 and loop_step % update_every != 0:
+            return False
+
+        with self._lock:
+            if self._last_blocking_control_step == loop_step:
+                return False
+
+        if cancel_check is not None and cancel_check():
+            return False
+        cam_high = raw_obs["images"].get("cam_high")
+        if cam_high is None:
+            return False
+
+        with runtime._lock:
+            task = runtime.task
+        with self._lock:
+            manual_provider = self._manual_provider
+            manual_override = self._manual_override
+
+        if manual_override and manual_provider is not None:
+            logger.info("Blocking trajectory mode waiting for manual trajectory at step %d", loop_step)
+            pred = None
+            while True:
+                if cancel_check is not None and cancel_check():
+                    return False
+                pred = manual_provider(cam_high.copy(), task, cancel_check)
+                if pred is not None and not pred.is_empty():
+                    break
+                logger.info("Manual trajectory dialog returned no prediction; waiting for a finished annotation.")
+                time.sleep(0.1)
+            self._predictor.set_cached(pred, cam_high)
+            self._store_prediction_visualization(runtime, cam_high, pred, task)
+        else:
+            logger.info("Blocking trajectory mode waiting for Doubao trajectory at step %d", loop_step)
+            self._predictor.refresh(cam_high, task)
+        with self._lock:
+            self._last_blocking_control_step = loop_step
+            self._use_cached_once = True
+        return True
+
+    def _render_trajectory_image(self, image: np.ndarray, traj_text: str) -> Optional[np.ndarray]:
+        try:
+            from .trajectory_visualizer import render_trajectory_overlay
+
+            return render_trajectory_overlay(image, traj_text)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Trajectory visualization failed: %s", e)
+            return None
+
+    def _store_prediction_visualization(
+        self,
+        runtime: RuntimeState,
+        image: np.ndarray,
+        pred,
+        task: str,
+    ) -> None:
+        if pred is None or pred.is_empty():
+            return
+        traj_text = pred.to_loc_token_text()
+        prompt_traj_text = clean_trajectory_prompt_text(traj_text)
+        traj_image = self._render_trajectory_image(image, traj_text)
+        with runtime._lock:
+            runtime.last_traj_text = prompt_traj_text
+            runtime.last_traj_image = traj_image
+            runtime.last_prompt = f"{task}, traj: {prompt_traj_text}"
+
     def build_obs(self, raw_obs, runtime):
         obs = self._base_obs(raw_obs)
 
         cam_high = raw_obs["images"]["cam_high"]
-        pred = self._predictor.step(cam_high, runtime.task)
+        with runtime._lock:
+            task = runtime.task
+
+        self._predictor.set_update_callback(
+            lambda pred, image, runtime=runtime, task=task: self._store_prediction_visualization(
+                runtime,
+                image,
+                pred,
+                task,
+            )
+        )
+        with self._lock:
+            use_cached_once = self._use_cached_once
+            self._use_cached_once = False
+
+        if self._predictor.blocking:
+            pred = self._predictor.last
+            if pred is None or pred.is_empty():
+                pred = self._predictor.refresh(cam_high, task)
+        elif use_cached_once:
+            pred = self._predictor.last
+        else:
+            pred = self._predictor.step(cam_high, task)
 
         if pred is None or pred.is_empty():
             traj_text = ""
-            prompt = runtime.task
+            prompt = task
+            traj_image = None
         else:
             traj_text = pred.to_loc_token_text()
-            prompt = f"{runtime.task}, traj: {traj_text}"
+            prompt_traj_text = clean_trajectory_prompt_text(traj_text)
+            prompt = f"{task}, traj: {prompt_traj_text}"
+            traj_image = self._render_trajectory_image(cam_high, traj_text)
 
         with runtime._lock:
-            runtime.last_traj_text = traj_text
+            runtime.last_traj_text = clean_trajectory_prompt_text(traj_text)
+            runtime.last_traj_image = traj_image
             runtime.last_prompt = prompt
         obs["prompt"] = prompt
         return obs
@@ -640,6 +786,8 @@ def make_handler(
     foreact_client: Optional[Any] = None,
     doubao_predictor: Optional[Any] = None,
     subtask_predictor: Optional[Any] = None,
+    manual_traj_provider: Optional[Callable[..., Any]] = None,
+    manual_traj_override: bool = False,
 ) -> ModeHandler:
     """Factory used by ``EvalRunner`` and CLI wrappers."""
     mode = mode.lower()
@@ -655,15 +803,33 @@ def make_handler(
         from .doubao_predictor import CachedTrajectoryPredictor, DoubaoTrajectoryPredictor
 
         if doubao_predictor is None:
+            try:
+                predictor_impl = DoubaoTrajectoryPredictor(api_key=doubao_api_key)
+            except Exception:
+                if not (manual_traj_override and manual_traj_provider is not None):
+                    raise
+                logger.info(
+                    "Doubao predictor is unavailable; starting trajectory mode with manual override only."
+                )
+
+                class _ManualOnlyTrajectoryPredictor:
+                    def predict(self, image: np.ndarray, task_description: str) -> None:
+                        return None
+
+                predictor_impl = _ManualOnlyTrajectoryPredictor()
             doubao_predictor = CachedTrajectoryPredictor(
-                predictor=DoubaoTrajectoryPredictor(api_key=doubao_api_key),
+                predictor=predictor_impl,
                 update_every=traj_step_interval,
                 blocking=blocking,
             )
         else:
             doubao_predictor.set_blocking(blocking)
             doubao_predictor.set_update_every(traj_step_interval)
-        return TrajectoryMode(predictor=doubao_predictor)
+        return TrajectoryMode(
+            predictor=doubao_predictor,
+            manual_provider=manual_traj_provider,
+            manual_override=manual_traj_override,
+        )
     if mode == "subgoal":
         from .foreact_client import ForeactClient
 

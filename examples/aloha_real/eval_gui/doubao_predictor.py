@@ -2,7 +2,7 @@
 
 Used by Mode 2 ("Add Trajectory"). Given the current cam_high frame and a
 task description, asks Doubao to produce a per-arm motion plan in the
-**exact canonical format used at training time** (from
+**canonical internal format** used by the trajectory tooling (from
 ``scripts/preprocess_traj.py``):
 
     Left: Go along (xL,yL), (xL,yL), close gripper, (xL,yL).
@@ -10,8 +10,9 @@ task description, asks Doubao to produce a per-arm motion plan in the
 
 After the model returns this CoT string, ``coords_to_loc_tokens`` replaces
 each ``(x, y)`` with PaliGemma ``<loc{x:04d}><loc{y:04d}>`` tokens — using
-the **same regex** as the training preprocessor — so the on-wire prompt
-distribution matches the training distribution byte-for-byte.
+the **same regex** as the training preprocessor. The GUI later strips any
+HTML break tags before constructing the final VLA prompt, so the model sees
+clean text plus ``<locXXXX>`` tokens only.
 
 The predictor is best-effort: any API/parsing failure returns ``None`` and
 the caller is expected to reuse the previous prediction (or skip the
@@ -25,8 +26,8 @@ import os
 import re
 import threading
 import time
-from dataclasses import dataclass, field
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import Callable, List, Optional
 
 import cv2
 import numpy as np
@@ -54,9 +55,9 @@ def coords_to_loc_tokens(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Strict trajectory string format for the banana two-arm dataset.
 # ---------------------------------------------------------------------------
-# The training preprocessor emits the literal substring below verbatim. Any
-# deviation (extra/missing whitespace, missing ``<br/>``) re-shards the
-# tokenizer output and breaks train/eval parity, so we keep it exact.
+# The internal trajectory string still uses the canonical left/right separator
+# expected by the trajectory visualizer and parsers. The GUI sanitizes any
+# HTML break tags before the text is passed to the VLA prompt.
 TRAJ_LEFT_PREFIX = "Left: Go along "
 TRAJ_RIGHT_PREFIX = ". Right: Go along <br/>  "   # NB: two spaces after <br/>
 
@@ -95,16 +96,52 @@ class TrajectoryPrediction:
 
 
 # ---------------------------------------------------------------------------
+# _SYSTEM_PROMPT = (
+#     "You are an expert Vision-Language model that generates a low-level motion "
+#     "plan for a bimanual robot manipulator. The image shows the current "
+#     "scene; coordinates are normalised to a 0-1000 grid with (0,0) at the "
+#     "top-left and (1000,1000) at the bottom-right.\n\n"
+#     "For BOTH the left and right end-effectors, output an ordered list of "
+#     "items. Each item is either:\n"
+#     "  - a coordinate pair in the form '(x, y)', or\n"
+#     "  - one of these gripper action keywords: 'close gripper', 'open gripper'.\n\n"
+#     "Respond with EXACTLY this XML block at the very end of your reply, "
+#     "with no extra punctuation, no surrounding code fences, and one item per "
+#     "<item>...</item> tag:\n"
+#     "<plan>\n"
+#     "<left>\n"
+#     "<item>(x, y)</item>\n"
+#     "<item>close gripper</item>\n"
+#     "<item>(x, y)</item>\n"
+#     "</left>\n"
+#     "<right>\n"
+#     "<item>(x, y)</item>\n"
+#     "<item>(x, y)</item>\n"
+#     "</right>\n"
+#     "</plan>\n"
+#     "If an arm is idle for this task, still emit at least one waypoint that "
+#     "represents its current resting position."
+# )
+
 _SYSTEM_PROMPT = (
-    "You are an expert Vision-Language model that generates a low-level motion "
-    "plan for a bimanual robot manipulator. The image shows the current "
+    "You are an expert Vision-Language-Action model generating low-level motion "
+    "plans for a bimanual robot manipulator. The image shows the current "
     "scene; coordinates are normalised to a 0-1000 grid with (0,0) at the "
     "top-left and (1000,1000) at the bottom-right.\n\n"
-    "For BOTH the left and right end-effectors, output an ordered list of "
-    "items. Each item is either:\n"
+
+    "Please follow these steps strictly to build your logic before outputting the plan:\n"
+    "1. SCENE ANALYSIS: Briefly describe the spatial relationship between the left/right "
+    "end-effectors, the target object(s), and any obstacles. Identify current gripper states.\n"
+    "2. STRATEGY: Explain the bimanual movement strategy. Think in terms of action keyframes "
+    "(e.g., pre-grasp, grasp, lift, place, handover) and assign roles to the Left and Right arms.\n"
+    "3. WAYPOINTS: Predict the trajectory based on your strategy.\n\n"
+
+    "For BOTH the left and right end-effectors, the waypoints must be an ordered list of items. "
+    "Each item is either:\n"
     "  - a coordinate pair in the form '(x, y)', or\n"
     "  - one of these gripper action keywords: 'close gripper', 'open gripper'.\n\n"
-    "Respond with EXACTLY this XML block at the very end of your reply, "
+
+    "Respond with EXACTLY this XML block at the VERY END of your reply, "
     "with no extra punctuation, no surrounding code fences, and one item per "
     "<item>...</item> tag:\n"
     "<plan>\n"
@@ -183,8 +220,9 @@ class DoubaoTrajectoryPredictor:
                             {"type": "image_url",
                              "image_url": {"url": f"data:image/jpeg;base64,{jpeg_b64}"}},
                             {"type": "text",
-                             "text": (f"Robot task: \"{task_description}\". "
-                                      "Output a per-arm motion plan in the required XML.")},
+                             "text": (f"Robot task: \"{task_description}\".\n"
+                                      "Please analyze the scene, plan the bimanual strategy, "
+                                      "and then output the motion plan in the required XML format at the end.")},
                         ],
                     },
                 ],
@@ -257,6 +295,7 @@ class CachedTrajectoryPredictor:
         self._step = 0
         self._lock = threading.Lock()
         self._inflight: Optional[threading.Thread] = None
+        self._on_update: Optional[Callable[[TrajectoryPrediction, np.ndarray], None]] = None
         self._stats = {"requests": 0, "successes": 0, "failures": 0, "cache_hits": 0}
 
     def reset(self) -> None:
@@ -275,14 +314,77 @@ class CachedTrajectoryPredictor:
     def stats(self) -> dict:
         return dict(self._stats)
 
+    @property
+    def blocking(self) -> bool:
+        with self._lock:
+            return self._blocking
+
+    @property
+    def update_every(self) -> int:
+        with self._lock:
+            return self._update_every
+
     # --- runtime knobs (toggled from the GUI) ------------------------- #
     def set_blocking(self, blocking: bool) -> None:
-        self._blocking = bool(blocking)
+        with self._lock:
+            self._blocking = bool(blocking)
 
     def set_update_every(self, n: int) -> None:
-        self._update_every = max(1, int(n))
+        with self._lock:
+            self._update_every = max(1, int(n))
+
+    def set_update_callback(
+        self,
+        callback: Optional[Callable[[TrajectoryPrediction, np.ndarray], None]],
+    ) -> None:
+        with self._lock:
+            self._on_update = callback
+
+    def set_cached(
+        self,
+        result: Optional[TrajectoryPrediction],
+        image: Optional[np.ndarray] = None,
+    ) -> Optional[TrajectoryPrediction]:
+        """Inject a cached trajectory result from an external source."""
+        img_copy = None if image is None else image.copy()
+        with self._lock:
+            self._stats["requests"] += 1
+        last, callback = self._store_result(result)
+        if result is not None and not result.is_empty() and callback is not None and img_copy is not None:
+            try:
+                callback(result, img_copy)
+            except Exception:
+                logger.exception("Trajectory update callback failed")
+        return last
 
     # ----------------------------------------------------------------- #
+    def _store_result(self, result: Optional[TrajectoryPrediction]) -> tuple[Optional[TrajectoryPrediction], Optional[Callable]]:
+        callback = None
+        with self._lock:
+            if result is not None and not result.is_empty():
+                self._last = result
+                self._initialized = True
+                self._stats["successes"] += 1
+                callback = self._on_update
+            else:
+                self._stats["failures"] += 1
+            return self._last, callback
+
+    def refresh(self, image: np.ndarray, task_description: str) -> Optional[TrajectoryPrediction]:
+        """Synchronously fetch a fresh trajectory and update the cache."""
+        img_copy = image.copy()
+        with self._lock:
+            self._stats["requests"] += 1
+
+        result = self._predictor.predict(img_copy, task_description)
+        last, callback = self._store_result(result)
+        if result is not None and not result.is_empty() and callback is not None:
+            try:
+                callback(result, img_copy)
+            except Exception:
+                logger.exception("Trajectory update callback failed")
+        return last
+
     def step(self, image: np.ndarray, task_description: str) -> Optional[TrajectoryPrediction]:
         with self._lock:
             # First-step wait: always block synchronously until we have an
@@ -293,35 +395,26 @@ class CachedTrajectoryPredictor:
             if not should_request:
                 self._stats["cache_hits"] += 1
                 return self._last
-            self._stats["requests"] += 1
             img_copy = image.copy()
             blocking = first_step or self._blocking   # force-block on step 0
 
         if blocking:
-            result = self._predictor.predict(img_copy, task_description)
-            with self._lock:
-                if result is not None and not result.is_empty():
-                    self._last = result
-                    self._initialized = True
-                    self._stats["successes"] += 1
-                else:
-                    self._stats["failures"] += 1
-                return self._last
+            return self.refresh(img_copy, task_description)
 
         # Non-blocking: only spawn if no request currently in flight.
         with self._lock:
             if self._inflight is not None and self._inflight.is_alive():
                 return self._last
+            self._stats["requests"] += 1
 
         def _run() -> None:
             result = self._predictor.predict(img_copy, task_description)
-            with self._lock:
-                if result is not None and not result.is_empty():
-                    self._last = result
-                    self._initialized = True
-                    self._stats["successes"] += 1
-                else:
-                    self._stats["failures"] += 1
+            _, callback = self._store_result(result)
+            if result is not None and not result.is_empty() and callback is not None:
+                try:
+                    callback(result, img_copy)
+                except Exception:
+                    logger.exception("Trajectory update callback failed")
 
         t = threading.Thread(target=_run, daemon=True, name="doubao-predict")
         t.start()
