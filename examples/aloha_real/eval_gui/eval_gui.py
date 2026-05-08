@@ -13,13 +13,13 @@ Layout (left = controls; right = camera views)
        2: [grasp_the_banana_end                  ]
        3: [move_the_banana_to_the_green_plate_end]
        4: [place_the_banana_in_the_green_plate_end]
-       [Load JSON ...]    Doubao auto-suggest: [ ]
+       [Add] [Remove] [Load JSON ...]    Doubao auto-suggest: [ ]
 
     Runtime info: prompt / subtask / traj / step
     Log pane
 
 Keyboard:
-    1 / 2 / 3 / 4 -> subtask key (only mode 3)
+    1-9           -> subtask key (only mode 3; use row buttons for 10+)
     Space         -> pause / resume
     H             -> 回零
     D             -> dump model inputs
@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import shutil
 import socket
 import subprocess
@@ -102,6 +103,7 @@ class _EventBridge(QtCore.QObject):
     info = QtCore.pyqtSignal(str)
     error = QtCore.pyqtSignal(str)
     step = QtCore.pyqtSignal(int)
+    gripper = QtCore.pyqtSignal(float, float, float, float, float, float, float)
     mode_changed = QtCore.pyqtSignal(str)
     episode_start = QtCore.pyqtSignal()
     episode_end = QtCore.pyqtSignal(int)
@@ -129,6 +131,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         self._bridge.info.connect(self._log_info)
         self._bridge.error.connect(self._log_error)
         self._bridge.step.connect(self._on_step)
+        self._bridge.gripper.connect(self._on_gripper)
         self._bridge.mode_changed.connect(lambda m: self._log_info(f"Mode -> {m}"))
         self._bridge.episode_start.connect(lambda: self._log_info("Episode started"))
         self._bridge.episode_end.connect(lambda n: self._log_info(f"Episode ended after {n} steps"))
@@ -259,6 +262,23 @@ class EvalGUI(QtWidgets.QMainWindow):
         sm_row.addWidget(self.sp_interval)
         left.addLayout(sm_row)
 
+        # Binary gripper threshold + live raw output display.
+        grip_row = QtWidgets.QHBoxLayout()
+        grip_row.addWidget(QtWidgets.QLabel("Gripper threshold:"))
+        self.sp_gripper_threshold = QtWidgets.QDoubleSpinBox()
+        self.sp_gripper_threshold.setRange(-10.0, 10.0)
+        self.sp_gripper_threshold.setDecimals(3)
+        self.sp_gripper_threshold.setSingleStep(0.05)
+        self.sp_gripper_threshold.setValue(float(self._cfg.gripper_threshold))
+        self.sp_gripper_threshold.setToolTip(
+            "Raw gripper opening widths above this threshold become binary 1 (open); otherwise binary 0 (close)."
+        )
+        self.sp_gripper_threshold.valueChanged.connect(self._on_gripper_threshold_changed)
+        grip_row.addWidget(self.sp_gripper_threshold)
+        self.lbl_gripper_raw_inline = QtWidgets.QLabel("raw L: -   R: - | bin L: -   R: -")
+        grip_row.addWidget(self.lbl_gripper_raw_inline, 1)
+        left.addLayout(grip_row)
+
         # Run buttons
         btn_row = QtWidgets.QHBoxLayout()
         self.btn_start = QtWidgets.QPushButton("▶ Start")
@@ -281,20 +301,34 @@ class EvalGUI(QtWidgets.QMainWindow):
         left.addLayout(btn_row)
 
         # Subtask label editor (Mode 3)
-        self.gb_subtask = QtWidgets.QGroupBox("Subtask labels (editable, key 1-4)")
-        sub_layout = QtWidgets.QFormLayout(self.gb_subtask)
-        self.subtask_inputs = {}
-        for k in sorted(self._runtime.subtask_labels.keys()):
-            le = QtWidgets.QLineEdit(self._runtime.subtask_labels[k])
-            le.editingFinished.connect(lambda kk=k: self._on_subtask_edited(kk))
-            sub_layout.addRow(f"key {k}:", le)
-            self.subtask_inputs[k] = le
+        self.gb_subtask = QtWidgets.QGroupBox("Subtask labels (editable)")
+        sub_layout = QtWidgets.QVBoxLayout(self.gb_subtask)
+        self.subtask_inputs: dict[int, QtWidgets.QLineEdit] = {}
 
-        # Active key indicator + apply / load
+        self.subtask_scroll = QtWidgets.QScrollArea()
+        self.subtask_scroll.setWidgetResizable(True)
+        self.subtask_scroll.setMinimumHeight(112)
+        self.subtask_scroll.setMaximumHeight(168)
+        self.subtask_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.subtask_scroll_widget = QtWidgets.QWidget()
+        self.subtask_form_layout = QtWidgets.QFormLayout(self.subtask_scroll_widget)
+        self.subtask_form_layout.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
+        self.subtask_form_layout.setContentsMargins(6, 6, 6, 6)
+        self.subtask_scroll.setWidget(self.subtask_scroll_widget)
+        sub_layout.addWidget(self.subtask_scroll)
+
+        # Active key indicator + add / remove / load
         sub_btn_row = QtWidgets.QHBoxLayout()
         self.lbl_active_key = QtWidgets.QLabel(f"active: {self._runtime.subtask_key}")
         sub_btn_row.addWidget(self.lbl_active_key)
         sub_btn_row.addStretch(1)
+        self.btn_add_subtask = QtWidgets.QPushButton("Add")
+        self.btn_add_subtask.clicked.connect(self._on_add_subtask)
+        sub_btn_row.addWidget(self.btn_add_subtask)
+        self.btn_remove_subtask = QtWidgets.QPushButton("Remove")
+        self.btn_remove_subtask.setToolTip("Remove the highest-numbered subtask label")
+        self.btn_remove_subtask.clicked.connect(self._on_remove_subtask)
+        sub_btn_row.addWidget(self.btn_remove_subtask)
         self.btn_load_json = QtWidgets.QPushButton("Load JSON…")
         self.btn_load_json.clicked.connect(self._on_load_subtask_json)
         sub_btn_row.addWidget(self.btn_load_json)
@@ -306,8 +340,9 @@ class EvalGUI(QtWidgets.QMainWindow):
             "placeholder — see doubao_predictor.SubtaskPredictor."
         )
         sub_btn_row.addWidget(self.cb_doubao_auto)
-        sub_layout.addRow(sub_btn_row)
+        sub_layout.addLayout(sub_btn_row)
         left.addWidget(self.gb_subtask)
+        self._refresh_subtask_inputs()
 
         # Live status
         self.gb_status = QtWidgets.QGroupBox("Runtime info")
@@ -317,10 +352,16 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.lbl_subtask = QtWidgets.QLabel("-")
         self.lbl_traj = QtWidgets.QLabel("-")
         self.lbl_traj.setWordWrap(True)
+        self.lbl_gripper_raw = QtWidgets.QLabel("L: -   R: -")
+        self.lbl_gripper_binary = QtWidgets.QLabel("L: -   R: -")
+        self.lbl_gripper_cmd = QtWidgets.QLabel("L: -   R: -")
         self.lbl_step = QtWidgets.QLabel("0")
         st.addRow("Prompt:", self.lbl_prompt)
         st.addRow("Subtask:", self.lbl_subtask)
         st.addRow("Trajectory:", self.lbl_traj)
+        st.addRow("Gripper raw:", self.lbl_gripper_raw)
+        st.addRow("Gripper binary:", self.lbl_gripper_binary)
+        st.addRow("Gripper hw cmd:", self.lbl_gripper_cmd)
         st.addRow("Step:", self.lbl_step)
         left.addWidget(self.gb_status)
 
@@ -389,6 +430,21 @@ class EvalGUI(QtWidgets.QMainWindow):
             self._bridge.error.emit(payload.get("msg", ""))
         elif kind == "step":
             self._bridge.step.emit(payload.get("step", 0))
+        elif kind == "gripper":
+            threshold = float(payload.get("threshold", self._cfg.gripper_threshold))
+            left_raw = float(payload.get("left_raw", 0.0))
+            right_raw = float(payload.get("right_raw", 0.0))
+            left_binary = float(payload.get("left_binary", 1.0 if left_raw > threshold else 0.0))
+            right_binary = float(payload.get("right_binary", 1.0 if right_raw > threshold else 0.0))
+            self._bridge.gripper.emit(
+                left_raw,
+                right_raw,
+                left_binary,
+                right_binary,
+                float(payload.get("left_hw_cmd", payload.get("left_cmd", 0.0))),
+                float(payload.get("right_hw_cmd", payload.get("right_cmd", 0.0))),
+                threshold,
+            )
         elif kind == "mode_changed":
             self._bridge.mode_changed.emit(payload.get("mode", ""))
         elif kind == "episode_start":
@@ -399,6 +455,25 @@ class EvalGUI(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(int)
     def _on_step(self, n: int) -> None:
         self.lbl_step.setText(str(n))
+
+    @QtCore.pyqtSlot(float, float, float, float, float, float, float)
+    def _on_gripper(
+        self,
+        left_raw: float,
+        right_raw: float,
+        left_binary: float,
+        right_binary: float,
+        left_cmd: float,
+        right_cmd: float,
+        threshold: float,
+    ) -> None:
+        raw_text = f"L: {left_raw:.4f}   R: {right_raw:.4f}"
+        binary_text = f"L: {int(left_binary)}   R: {int(right_binary)}"
+        cmd_text = f"L: {left_cmd:.4f}   R: {right_cmd:.4f}   threshold: {threshold:.4f}"
+        self.lbl_gripper_raw_inline.setText(f"raw {raw_text} | bin {binary_text}")
+        self.lbl_gripper_raw.setText(raw_text)
+        self.lbl_gripper_binary.setText(binary_text)
+        self.lbl_gripper_cmd.setText(cmd_text)
 
     # ------------------------------------------------------------------ #
     @staticmethod
@@ -454,6 +529,29 @@ class EvalGUI(QtWidgets.QMainWindow):
 
     def _checkpoint_text(self) -> str:
         return self.cb_checkpoint.currentText().strip()
+
+    @staticmethod
+    def _sanitize_video_stem(text: str) -> str:
+        cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", text.strip())
+        cleaned = cleaned.strip("._-")
+        return (cleaned or "checkpoint")[:120]
+
+    def _checkpoint_video_stem(self) -> str:
+        checkpoint = self._checkpoint_text().rstrip("/\\")
+        if not checkpoint:
+            checkpoint = self._default_checkpoint_for_mode(self._runtime.mode)
+        parts = [p for p in checkpoint.replace("\\", "/").split("/") if p and p != "gs:"]
+        name = parts[-1] if parts else "checkpoint"
+        parent = parts[-2] if len(parts) >= 2 else ""
+        if name.isdigit() and parent:
+            name = f"{parent}_{name}"
+        return self._sanitize_video_stem(name)
+
+    def _configure_video_recording(self) -> None:
+        self._cfg.record_video = True
+        self._cfg.video_dir = str(_REPO_ROOT / "test_video")
+        self._cfg.video_name = self._checkpoint_video_stem()
+        self._cfg.video_fps = max(1.0, float(self._cfg.max_hz))
 
     def _default_checkpoint_for_mode(self, mode: str) -> str:
         preset = _POLICY_PRESETS.get(mode, _POLICY_PRESETS["basic"])
@@ -649,10 +747,55 @@ class EvalGUI(QtWidgets.QMainWindow):
             self._runtime.task = self.le_task.text().strip()
         self._log_info(f"Task -> {self._runtime.task!r}")
 
+    def _make_subtask_row(self, key: int, label: str) -> QtWidgets.QWidget:
+        row = QtWidgets.QWidget()
+        row_layout = QtWidgets.QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
+
+        le = QtWidgets.QLineEdit(label)
+        le.editingFinished.connect(lambda kk=key: self._on_subtask_edited(kk))
+        row_layout.addWidget(le, 1)
+        self.subtask_inputs[key] = le
+
+        btn_use = QtWidgets.QPushButton("Use")
+        btn_use.setFixedWidth(52)
+        btn_use.clicked.connect(lambda _=False, kk=key: self._set_subtask(kk))
+        row_layout.addWidget(btn_use)
+        return row
+
     def _on_subtask_edited(self, key: int) -> None:
+        if key not in self.subtask_inputs:
+            return
         new_label = self.subtask_inputs[key].text().strip()
         self._runtime.set_subtask_label(key, new_label)
         self._log_info(f"subtask[{key}] -> {new_label!r}")
+
+    def _on_add_subtask(self) -> None:
+        key = self._runtime.add_subtask_label()
+        self._refresh_subtask_inputs()
+        QtCore.QTimer.singleShot(
+            0,
+            lambda: self.subtask_scroll.verticalScrollBar().setValue(
+                self.subtask_scroll.verticalScrollBar().maximum()
+            ),
+        )
+        self._log_info(f"Added subtask key={key}")
+
+    def _on_remove_subtask(self) -> None:
+        with self._runtime._lock:
+            labels = dict(self._runtime.subtask_labels)
+        if len(labels) <= 1:
+            self._log_error("Cannot remove the last subtask label.")
+            return
+        key = max(labels.keys())
+        try:
+            label = self._runtime.remove_subtask_label(key)
+        except Exception as e:                       # noqa: BLE001
+            self._log_error(f"Remove subtask failed: {e}")
+            return
+        self._refresh_subtask_inputs()
+        self._log_info(f"Removed subtask key={key} ({label})")
 
     def _on_load_subtask_json(self) -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -671,16 +814,13 @@ class EvalGUI(QtWidgets.QMainWindow):
     def _refresh_subtask_inputs(self) -> None:
         snap = self._runtime.snapshot()
         labels = snap["subtask_labels"]
-        layout: QtWidgets.QFormLayout = self.gb_subtask.layout()
-        # Clear all rows except the bottom buttons row.
-        while layout.rowCount() > 1:
+        layout = self.subtask_form_layout
+        while layout.rowCount():
             layout.removeRow(0)
         self.subtask_inputs = {}
         for k in sorted(labels.keys()):
-            le = QtWidgets.QLineEdit(labels[k])
-            le.editingFinished.connect(lambda kk=k: self._on_subtask_edited(kk))
-            layout.insertRow(layout.rowCount() - 1, f"key {k}:", le)
-            self.subtask_inputs[k] = le
+            layout.addRow(f"key {k}:", self._make_subtask_row(k, labels[k]))
+        self.btn_remove_subtask.setEnabled(len(labels) > 1)
 
     def _on_mode_changed(self, mode: str) -> None:
         if self._runner is not None and self.cb_local_policy.isChecked():
@@ -738,6 +878,9 @@ class EvalGUI(QtWidgets.QMainWindow):
         if self._handler is not None:
             self._handler.set_step_interval(n)
 
+    def _on_gripper_threshold_changed(self, value: float) -> None:
+        self._cfg.gripper_threshold = float(value)
+
     def _set_subtask(self, key: int) -> None:
         with self._runtime._lock:
             labels = dict(self._runtime.subtask_labels)
@@ -774,6 +917,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         if self._runner is None:
             self._on_connect()
         if self._runner is not None:
+            self._configure_video_recording()
             self._runner.start()
             self._log_info("Run loop started.")
 
@@ -799,6 +943,10 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.lbl_prompt.setText("(idle)")
         self.lbl_subtask.setText("-")
         self.lbl_traj.setText("-")
+        self.lbl_gripper_raw_inline.setText("raw L: -   R: - | bin L: -   R: -")
+        self.lbl_gripper_raw.setText("L: -   R: -")
+        self.lbl_gripper_binary.setText("L: -   R: -")
+        self.lbl_gripper_cmd.setText("L: -   R: -")
         self.lbl_step.setText("0")
         blank_pm = __import__('PyQt5.QtGui', fromlist=['QPixmap']).QPixmap(
             self.lbl_subgoal.width(), self.lbl_subgoal.height())
@@ -849,8 +997,9 @@ class EvalGUI(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------ #
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:        # noqa: N802
         k = event.key()
-        if k in (QtCore.Qt.Key_1, QtCore.Qt.Key_2, QtCore.Qt.Key_3, QtCore.Qt.Key_4):
-            self._set_subtask(int(event.text()))
+        text = event.text()
+        if text.isdigit() and text != "0":
+            self._set_subtask(int(text))
         elif k == QtCore.Qt.Key_Space:
             self._on_pause_toggle()
         elif k == QtCore.Qt.Key_H:
@@ -882,6 +1031,7 @@ def main() -> None:
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--action_horizon", type=int, default=25)
     p.add_argument("--max_steps", type=int, default=1000)
+    p.add_argument("--gripper_threshold", type=float, default=2.0)
     p.add_argument("--dry_run", action="store_true")
     p.add_argument("--dump_dir", default="debug_inputs")
     p.add_argument("--log", default="INFO")
@@ -895,6 +1045,7 @@ def main() -> None:
         port=args.port,
         action_horizon=args.action_horizon,
         max_steps=args.max_steps,
+        gripper_threshold=args.gripper_threshold,
         dry_run=args.dry_run,
         dump_dir=args.dump_dir,
     )

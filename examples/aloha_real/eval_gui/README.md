@@ -11,7 +11,7 @@ the on-wire observation matches what the **training** repack transforms produced
 |-----------|--------------------------------------------|------------------------------------------------------------------------------|
 | `basic`   | `pi05_aloha_banana`                        | nothing — `prompt = task`                                                    |
 | `traj`    | `pi05_aloha_banana_traj`                   | `prompt = "{task}, traj: Left: Go along ... Right: Go along <br/>  ..."`     |
-| `subtask` | `pi05_aloha_banana_subtask_segment`        | `prompt = "{task}, subtask: {label}"`; label chosen by keys 1/2/3/4          |
+| `subtask` | `pi05_aloha_banana_subtask_segment`        | `prompt = "{task}, subtask: {label}"`; label chosen from the subtask list    |
 | `subgoal` | `pi05_aloha_banana_subgoal_base`           | `subgoal_images = {"cam_high": HxWx3 uint8}` from ForeAct                    |
 
 ### Policy checkpoint selection
@@ -84,15 +84,66 @@ active key again counts as confirmation.
 
 * Default key on init = **1**, with the canonical banana labels
   pre-populated.
-* All four labels are **editable** in-place (just type & Enter).
+* Labels are **editable** in-place (just type & Enter).
+* Click **Add** to append a new subtask field. Click **Remove** to remove the
+  highest-numbered field. At least one label is always kept.
+* The label list is inside a fixed-height scroll area, so adding many labels
+  does not grow the window.
+* Click a row's **Use** button to select that subtask. Number keys `1`-`9`
+  are shortcuts for matching keys when they exist.
 * You can also click *Load JSON…* to swap them at runtime; format:
   `{"1": "label_a", "2": "label_b", ...}`.
-* In blocking mode, press `1` / `2` / `3` / `4` to release the next blocked
-  subtask interval with that label. The runtime status shows `(waiting)` while
-  the inference loop is paused for operator input.
+* In blocking mode, press/confirm a subtask key or click a row's **Use** button
+  to release the next blocked subtask interval with that label. The runtime
+  status shows `(waiting)` while the inference loop is paused for operator
+  input.
 * The `SubtaskPredictor` hook in `doubao_predictor.py` is reserved for a
   future Doubao-driven auto-suggest. The default impl is a no-op so it
   never overrides the human key.
+
+## Run Videos
+
+Each evaluation run automatically records the main camera (`cam_high`) to:
+
+```
+test_video/
+```
+
+Recording starts when the run loop starts and stops when the episode ends or
+you click **Stop**. File names include the selected checkpoint name and a
+timestamp, for example:
+
+```
+test_video/banana_subtask_seg_lr5e5_5000_20260507_102100.mp4
+```
+
+Videos are encoded as H.264 MP4 with `yuv420p` pixels and `+faststart`, so they
+can be opened directly in VS Code and browser-based players.
+
+## Binary Grippers
+
+The runner displays the raw continuous model output, thresholded binary state,
+and final hardware command for both grippers in the GUI at every control step.
+The raw model output is interpreted as gripper opening width: larger values
+mean the gripper should be more open. Before sending commands to the robot it
+thresholds the two gripper action dimensions:
+
+* left gripper raw output = action index `6`
+* right gripper raw output = action index `13`
+* raw value `> gripper_threshold` -> binary `1` (open)
+* raw value `<= gripper_threshold` -> binary `0` (close)
+
+The binary state is then mapped to the Piper hardware command values:
+
+* binary `1` -> `gripper_open` (default `4.0`)
+* binary `0` -> `gripper_close` (default `0.0`)
+
+The default threshold is `2.0`, and the GUI **Gripper threshold** spinbox can be
+adjusted while the run is active. You can also set the startup value with:
+
+```bash
+--gripper_threshold 2.0
+```
 
 ## Prerequisites
 
@@ -106,6 +157,7 @@ active key again counts as confirmation.
    export VOLCENKEY="<your-volc-ark-api-key>"
    ```
 4. **PyQt5** available in the `uv run python` environment.
+5. **ffmpeg** on `PATH` for automatic H.264 MP4 run videos.
 
 ## Run
 
@@ -120,7 +172,7 @@ bash scripts/start_aloha_eval_gui.sh \
 
 | key     | action                                                |
 |---------|-------------------------------------------------------|
-| 1/2/3/4 | set subtask key (mode 3)                              |
+| 1-9     | set subtask key when that key exists (mode 3)         |
 | Space   | pause / resume                                        |
 | H       | 回零 / Return-to-Zero (works whether running or idle) |
 | D       | dump model inputs (next inference)                    |

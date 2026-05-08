@@ -112,9 +112,35 @@ class RuntimeState:
                 self.subtask_input_seq += 1
                 self._subtask_cond.notify_all()
 
+    def add_subtask_label(self, label: Optional[str] = None) -> int:
+        with self._subtask_cond:
+            key = (max(self.subtask_labels) + 1) if self.subtask_labels else 1
+            self.subtask_labels[key] = str(label if label is not None else f"subtask_{key}")
+            if len(self.subtask_labels) == 1:
+                self.subtask_key = key
+                self.subtask_input_seq += 1
+                self._subtask_cond.notify_all()
+            return key
+
+    def remove_subtask_label(self, key: int) -> str:
+        key = int(key)
+        with self._subtask_cond:
+            if len(self.subtask_labels) <= 1:
+                raise ValueError("At least one subtask label is required")
+            if key not in self.subtask_labels:
+                raise KeyError(f"subtask key {key} does not exist")
+            label = self.subtask_labels.pop(key)
+            if self.subtask_key == key:
+                self.subtask_key = sorted(self.subtask_labels.keys())[0]
+                self.subtask_input_seq += 1
+                self._subtask_cond.notify_all()
+            return label
+
     def set_subtask_key(self, key: int) -> None:
         """Select or confirm a subtask key and wake blocking Mode 3 waits."""
         with self._subtask_cond:
+            if int(key) not in self.subtask_labels:
+                raise KeyError(f"subtask key {key} does not exist")
             self.subtask_key = int(key)
             self.subtask_input_seq += 1
             self._subtask_cond.notify_all()

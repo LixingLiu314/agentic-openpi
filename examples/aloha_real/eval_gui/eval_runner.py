@@ -18,6 +18,9 @@ from __future__ import annotations
 import json
 import logging
 import pathlib
+import queue
+import shutil
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -52,8 +55,169 @@ class RunnerConfig:
     cmd_right_topic: str = "/master/joint_right"
     gripper_open: float = 4.0
     gripper_close: float = 0.0
+    gripper_threshold: float = 2.0
     reset_move_time: float = 2.0
     dump_dir: str = "debug_inputs"   # under cwd; created on first dump
+    record_video: bool = False
+    video_dir: str = "test_video"
+    video_name: str = "eval"
+    video_fps: float = _DEFAULT_HZ
+
+
+class _VideoRecorder:
+    """Asynchronous RGB frame writer for VS Code-compatible H.264 MP4."""
+
+    def __init__(self, path: pathlib.Path, fps: float) -> None:
+        self.path = path
+        self._fps = float(fps)
+        self._queue: queue.Queue[Optional[np.ndarray]] = queue.Queue(maxsize=256)
+        self._thread = threading.Thread(target=self._run, daemon=True, name="eval-video-writer")
+        self._proc: Optional[subprocess.Popen] = None
+        self._dropped = 0
+        self._error = ""
+
+    def start(self) -> None:
+        if shutil.which("ffmpeg") is None:
+            raise RuntimeError("ffmpeg not found; cannot write VS Code-compatible MP4")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._thread.start()
+
+    def write(self, frame_rgb: Optional[np.ndarray]) -> None:
+        if frame_rgb is None:
+            return
+        arr = np.asarray(frame_rgb)
+        if arr.ndim != 3 or arr.shape[2] != 3:
+            return
+        if arr.dtype != np.uint8:
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+        try:
+            self._queue.put_nowait(arr.copy())
+        except queue.Full:
+            self._dropped += 1
+
+    def stop(self) -> int:
+        while True:
+            try:
+                self._queue.put_nowait(None)
+                break
+            except queue.Full:
+                try:
+                    self._queue.get_nowait()
+                    self._dropped += 1
+                except queue.Empty:
+                    pass
+        self._thread.join(timeout=10.0)
+        if self._thread.is_alive():
+            self._error = "video writer did not finish within 10 seconds"
+            self._terminate_process()
+        return self._dropped
+
+    @property
+    def error(self) -> str:
+        return self._error
+
+    def _start_ffmpeg(self, frame_shape: tuple[int, int, int]) -> None:
+        h, w = frame_shape[:2]
+        fps = max(1.0, self._fps)
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-s",
+            f"{w}x{h}",
+            "-r",
+            f"{fps:.3f}",
+            "-i",
+            "pipe:0",
+            "-an",
+            "-vf",
+            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(self.path),
+        ]
+        self._proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+
+    def _finish_process(self) -> None:
+        proc = self._proc
+        if proc is None:
+            return
+        stderr = b""
+        try:
+            if proc.stdin is not None:
+                try:
+                    proc.stdin.close()
+                except OSError:
+                    pass
+            returncode = proc.wait(timeout=10.0)
+            stderr = proc.stderr.read() if proc.stderr is not None else b""
+        except subprocess.TimeoutExpired:
+            self._error = "ffmpeg did not exit within 10 seconds"
+            self._terminate_process()
+            return
+        finally:
+            self._proc = None
+        if returncode != 0:
+            detail = stderr.decode("utf-8", errors="replace").strip()
+            self._error = f"ffmpeg exited with code {returncode}"
+            if detail:
+                self._error += f": {detail[-500:]}"
+
+    def _terminate_process(self) -> None:
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
+            self._proc = None
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=2.0)
+        self._proc = None
+
+    def _run(self) -> None:
+        try:
+            while True:
+                frame = self._queue.get()
+                if frame is None:
+                    break
+                if self._proc is None:
+                    self._start_ffmpeg(frame.shape)
+                if self._proc.stdin is None:
+                    self._error = "ffmpeg stdin is not available"
+                    break
+                try:
+                    self._proc.stdin.write(np.ascontiguousarray(frame).tobytes())
+                except BrokenPipeError:
+                    self._error = "ffmpeg pipe closed while writing video frames"
+                    break
+                if self._proc.poll() is not None:
+                    self._error = f"ffmpeg exited early with code {self._proc.returncode}"
+                    break
+        except Exception as e:                       # noqa: BLE001
+            self._error = f"video writer failed: {e}"
+        finally:
+            self._finish_process()
 
 
 class _BrokerAdapter:
@@ -325,6 +489,58 @@ class EvalRunner:
     def running(self) -> bool:
         return self._running.is_set() and self._thread is not None and self._thread.is_alive()
 
+    def _threshold_grippers(self, action_arr: np.ndarray) -> tuple[np.ndarray, dict[str, float]]:
+        action_arr = np.asarray(action_arr, dtype=np.float32).copy()
+        info: dict[str, float] = {}
+        if action_arr.ndim != 1 or action_arr.size <= 13:
+            return action_arr, info
+
+        threshold = float(self._cfg.gripper_threshold)
+        left_raw = float(action_arr[6])
+        right_raw = float(action_arr[13])
+        left_open = left_raw > threshold
+        right_open = right_raw > threshold
+        left_binary = 1.0 if left_open else 0.0
+        right_binary = 1.0 if right_open else 0.0
+        # The model's raw gripper output is opening width: larger means more open.
+        # Piper uses raw radian hardware commands: open defaults to 4.0 and close to 0.0.
+        left_hw_cmd = float(self._cfg.gripper_open if left_open else self._cfg.gripper_close)
+        right_hw_cmd = float(self._cfg.gripper_open if right_open else self._cfg.gripper_close)
+        action_arr[6] = left_hw_cmd
+        action_arr[13] = right_hw_cmd
+        info = {
+            "left_raw": left_raw,
+            "right_raw": right_raw,
+            "left_binary": left_binary,
+            "right_binary": right_binary,
+            "left_hw_cmd": left_hw_cmd,
+            "right_hw_cmd": right_hw_cmd,
+            "left_cmd": left_hw_cmd,
+            "right_cmd": right_hw_cmd,
+            "threshold": threshold,
+        }
+        return action_arr, info
+
+    def _emit_gripper_status(self, info: dict[str, float]) -> None:
+        if info:
+            self._on_event("gripper", info)
+
+    def _start_video_recorder(self) -> Optional[_VideoRecorder]:
+        if not self._cfg.record_video:
+            return None
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        stem = self._cfg.video_name.strip() or "eval"
+        path = pathlib.Path(self._cfg.video_dir) / f"{stem}_{ts}.mp4"
+        try:
+            recorder = _VideoRecorder(path=path, fps=max(1.0, float(self._cfg.video_fps)))
+            recorder.start()
+        except Exception as e:                       # noqa: BLE001
+            logger.warning("Video recording disabled: %s", e)
+            self._on_event("error", {"msg": f"Video recording disabled: {e}"})
+            return None
+        self._on_event("info", {"msg": f"Recording main camera video -> {path}"})
+        return recorder
+
     # ------------------------------------------------------------------ #
     def _run_loop(self) -> None:
         period = 1.0 / max(1.0, self._cfg.max_hz)
@@ -337,71 +553,87 @@ class EvalRunner:
             self._on_event("error", {"msg": f"Reset failed: {e}"})
             return
 
-        while not self._stop_evt.is_set() and self._step_count < self._cfg.max_steps:
-            if self._reset_evt.is_set():
-                self._reset_evt.clear()
-                try:
-                    self._on_event("info", {"msg": "Return-to-zero in progress ..."})
-                    with self._env_lock:
-                        self._env.reset()
-                    if self._broker is not None:
-                        self._broker.reset()
-                    self._on_event("info", {"msg": "Return-to-zero done."})
-                except Exception as e:                  # noqa: BLE001
-                    self._on_event("error", {"msg": f"RTZ failed: {e}"})
+        recorder = self._start_video_recorder()
+        try:
+            while not self._stop_evt.is_set() and self._step_count < self._cfg.max_steps:
+                if self._reset_evt.is_set():
+                    self._reset_evt.clear()
+                    try:
+                        self._on_event("info", {"msg": "Return-to-zero in progress ..."})
+                        with self._env_lock:
+                            self._env.reset()
+                        if self._broker is not None:
+                            self._broker.reset()
+                        self._on_event("info", {"msg": "Return-to-zero done."})
+                    except Exception as e:                  # noqa: BLE001
+                        self._on_event("error", {"msg": f"RTZ failed: {e}"})
 
-            if not self._running.is_set():
-                # Still publish observations to the GUI even when paused.
+                if not self._running.is_set():
+                    # Still publish observations to the GUI even when paused.
+                    try:
+                        with self._env_lock:
+                            obs_now = self._env.get_observation()
+                        with self._obs_lock:
+                            self._latest_obs = obs_now
+                    except Exception:                        # noqa: BLE001
+                        pass
+                    time.sleep(0.05)
+                    continue
+
+                t0 = time.time()
                 try:
                     with self._env_lock:
-                        obs_now = self._env.get_observation()
+                        raw_obs = self._env.get_observation()
                     with self._obs_lock:
-                        self._latest_obs = obs_now
-                except Exception:                        # noqa: BLE001
-                    pass
-                time.sleep(0.05)
-                continue
+                        self._latest_obs = raw_obs
+                    if recorder is not None:
+                        recorder.write((raw_obs.get("images") or {}).get("cam_high"))
 
-            t0 = time.time()
-            try:
-                with self._env_lock:
-                    raw_obs = self._env.get_observation()
-                with self._obs_lock:
-                    self._latest_obs = raw_obs
+                    with self._handler_lock:
+                        handler = self._handler
+                    reset_broker = handler.before_control_step(
+                        raw_obs,
+                        self._runtime,
+                        self._step_count,
+                        cancel_check=lambda: self._stop_evt.is_set() or not self._running.is_set(),
+                    )
+                    if reset_broker and self._broker is not None:
+                        self._broker.reset()
+                    if self._stop_evt.is_set():
+                        break
+                    if not self._running.is_set():
+                        continue
 
-                with self._handler_lock:
-                    handler = self._handler
-                reset_broker = handler.before_control_step(
-                    raw_obs,
-                    self._runtime,
-                    self._step_count,
-                    cancel_check=lambda: self._stop_evt.is_set() or not self._running.is_set(),
-                )
-                if reset_broker and self._broker is not None:
-                    self._broker.reset()
-                if self._stop_evt.is_set():
-                    break
-                if not self._running.is_set():
+                    action = self._broker.infer(raw_obs)
+                    if self._stop_evt.is_set():
+                        break
+                    if not self._running.is_set():
+                        continue
+                    action_arr, gripper_info = self._threshold_grippers(action["actions"])
+                    self._emit_gripper_status(gripper_info)
+                    with self._env_lock:
+                        self._env.step(action_arr)
+                    self._step_count += 1
+                    self._on_event("step", {"step": self._step_count})
+                except Exception as e:                       # noqa: BLE001
+                    logger.exception("Inference / step failed")
+                    self._on_event("error", {"msg": f"Step failed: {e}"})
+                    time.sleep(0.5)
                     continue
 
-                action = self._broker.infer(raw_obs)
-                if self._stop_evt.is_set():
-                    break
-                if not self._running.is_set():
-                    continue
-                action_arr = np.asarray(action["actions"], dtype=np.float32)
-                with self._env_lock:
-                    self._env.step(action_arr)
-                self._step_count += 1
-                self._on_event("step", {"step": self._step_count})
-            except Exception as e:                       # noqa: BLE001
-                logger.exception("Inference / step failed")
-                self._on_event("error", {"msg": f"Step failed: {e}"})
-                time.sleep(0.5)
-                continue
-
-            elapsed = time.time() - t0
-            if elapsed < period:
-                time.sleep(period - elapsed)
-
+                elapsed = time.time() - t0
+                if elapsed < period:
+                    time.sleep(period - elapsed)
+        finally:
+            if recorder is not None:
+                dropped = recorder.stop()
+                if recorder.path.exists() and recorder.path.stat().st_size > 0:
+                    msg = f"Saved main camera video -> {recorder.path}"
+                else:
+                    msg = f"Video recording ended without a saved file -> {recorder.path}"
+                if recorder.error:
+                    msg += f" ({recorder.error})"
+                if dropped:
+                    msg += f" ({dropped} frames dropped)"
+                self._on_event("info", {"msg": msg})
         self._on_event("episode_end", {"steps": self._step_count})
