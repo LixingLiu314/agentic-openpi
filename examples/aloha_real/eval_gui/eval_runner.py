@@ -55,7 +55,6 @@ class RunnerConfig:
     cmd_right_topic: str = "/master/joint_right"
     gripper_open: float = 4.0
     gripper_close: float = 0.0
-    gripper_threshold: float = 2.0
     reset_move_time: float = 2.0
     dump_dir: str = "debug_inputs"   # under cwd; created on first dump
     record_video: bool = False
@@ -489,41 +488,16 @@ class EvalRunner:
     def running(self) -> bool:
         return self._running.is_set() and self._thread is not None and self._thread.is_alive()
 
-    def _threshold_grippers(self, action_arr: np.ndarray) -> tuple[np.ndarray, dict[str, float]]:
-        action_arr = np.asarray(action_arr, dtype=np.float32).copy()
-        info: dict[str, float] = {}
+    def _emit_gripper_status(self, action_arr: np.ndarray) -> None:
         if action_arr.ndim != 1 or action_arr.size <= 13:
-            return action_arr, info
-
-        threshold = float(self._cfg.gripper_threshold)
-        left_raw = float(action_arr[6])
-        right_raw = float(action_arr[13])
-        left_open = left_raw > threshold
-        right_open = right_raw > threshold
-        left_binary = 1.0 if left_open else 0.0
-        right_binary = 1.0 if right_open else 0.0
-        # The model's raw gripper output is opening width: larger means more open.
-        # Piper uses raw radian hardware commands: open defaults to 4.0 and close to 0.0.
-        left_hw_cmd = float(self._cfg.gripper_open if left_open else self._cfg.gripper_close)
-        right_hw_cmd = float(self._cfg.gripper_open if right_open else self._cfg.gripper_close)
-        action_arr[6] = left_hw_cmd
-        action_arr[13] = right_hw_cmd
-        info = {
-            "left_raw": left_raw,
-            "right_raw": right_raw,
-            "left_binary": left_binary,
-            "right_binary": right_binary,
-            "left_hw_cmd": left_hw_cmd,
-            "right_hw_cmd": right_hw_cmd,
-            "left_cmd": left_hw_cmd,
-            "right_cmd": right_hw_cmd,
-            "threshold": threshold,
-        }
-        return action_arr, info
-
-    def _emit_gripper_status(self, info: dict[str, float]) -> None:
-        if info:
-            self._on_event("gripper", info)
+            return
+        self._on_event(
+            "gripper",
+            {
+                "left": float(action_arr[6]),
+                "right": float(action_arr[13]),
+            },
+        )
 
     def _start_video_recorder(self) -> Optional[_VideoRecorder]:
         if not self._cfg.record_video:
@@ -609,8 +583,8 @@ class EvalRunner:
                         break
                     if not self._running.is_set():
                         continue
-                    action_arr, gripper_info = self._threshold_grippers(action["actions"])
-                    self._emit_gripper_status(gripper_info)
+                    action_arr = np.asarray(action["actions"], dtype=np.float32)
+                    self._emit_gripper_status(action_arr)
                     with self._env_lock:
                         self._env.step(action_arr)
                     self._step_count += 1

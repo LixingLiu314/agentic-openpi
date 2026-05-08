@@ -103,7 +103,7 @@ class _EventBridge(QtCore.QObject):
     info = QtCore.pyqtSignal(str)
     error = QtCore.pyqtSignal(str)
     step = QtCore.pyqtSignal(int)
-    gripper = QtCore.pyqtSignal(float, float, float, float, float, float, float)
+    gripper = QtCore.pyqtSignal(float, float)
     mode_changed = QtCore.pyqtSignal(str)
     episode_start = QtCore.pyqtSignal()
     episode_end = QtCore.pyqtSignal(int)
@@ -262,23 +262,6 @@ class EvalGUI(QtWidgets.QMainWindow):
         sm_row.addWidget(self.sp_interval)
         left.addLayout(sm_row)
 
-        # Binary gripper threshold + live raw output display.
-        grip_row = QtWidgets.QHBoxLayout()
-        grip_row.addWidget(QtWidgets.QLabel("Gripper threshold:"))
-        self.sp_gripper_threshold = QtWidgets.QDoubleSpinBox()
-        self.sp_gripper_threshold.setRange(-10.0, 10.0)
-        self.sp_gripper_threshold.setDecimals(3)
-        self.sp_gripper_threshold.setSingleStep(0.05)
-        self.sp_gripper_threshold.setValue(float(self._cfg.gripper_threshold))
-        self.sp_gripper_threshold.setToolTip(
-            "Raw gripper opening widths above this threshold become binary 1 (open); otherwise binary 0 (close)."
-        )
-        self.sp_gripper_threshold.valueChanged.connect(self._on_gripper_threshold_changed)
-        grip_row.addWidget(self.sp_gripper_threshold)
-        self.lbl_gripper_raw_inline = QtWidgets.QLabel("raw L: -   R: - | bin L: -   R: -")
-        grip_row.addWidget(self.lbl_gripper_raw_inline, 1)
-        left.addLayout(grip_row)
-
         # Run buttons
         btn_row = QtWidgets.QHBoxLayout()
         self.btn_start = QtWidgets.QPushButton("▶ Start")
@@ -352,16 +335,12 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.lbl_subtask = QtWidgets.QLabel("-")
         self.lbl_traj = QtWidgets.QLabel("-")
         self.lbl_traj.setWordWrap(True)
-        self.lbl_gripper_raw = QtWidgets.QLabel("L: -   R: -")
-        self.lbl_gripper_binary = QtWidgets.QLabel("L: -   R: -")
-        self.lbl_gripper_cmd = QtWidgets.QLabel("L: -   R: -")
+        self.lbl_gripper = QtWidgets.QLabel("L: -   R: -")
         self.lbl_step = QtWidgets.QLabel("0")
         st.addRow("Prompt:", self.lbl_prompt)
         st.addRow("Subtask:", self.lbl_subtask)
         st.addRow("Trajectory:", self.lbl_traj)
-        st.addRow("Gripper raw:", self.lbl_gripper_raw)
-        st.addRow("Gripper binary:", self.lbl_gripper_binary)
-        st.addRow("Gripper hw cmd:", self.lbl_gripper_cmd)
+        st.addRow("Gripper:", self.lbl_gripper)
         st.addRow("Step:", self.lbl_step)
         left.addWidget(self.gb_status)
 
@@ -431,19 +410,9 @@ class EvalGUI(QtWidgets.QMainWindow):
         elif kind == "step":
             self._bridge.step.emit(payload.get("step", 0))
         elif kind == "gripper":
-            threshold = float(payload.get("threshold", self._cfg.gripper_threshold))
-            left_raw = float(payload.get("left_raw", 0.0))
-            right_raw = float(payload.get("right_raw", 0.0))
-            left_binary = float(payload.get("left_binary", 1.0 if left_raw > threshold else 0.0))
-            right_binary = float(payload.get("right_binary", 1.0 if right_raw > threshold else 0.0))
             self._bridge.gripper.emit(
-                left_raw,
-                right_raw,
-                left_binary,
-                right_binary,
-                float(payload.get("left_hw_cmd", payload.get("left_cmd", 0.0))),
-                float(payload.get("right_hw_cmd", payload.get("right_cmd", 0.0))),
-                threshold,
+                float(payload.get("left", 0.0)),
+                float(payload.get("right", 0.0)),
             )
         elif kind == "mode_changed":
             self._bridge.mode_changed.emit(payload.get("mode", ""))
@@ -456,24 +425,9 @@ class EvalGUI(QtWidgets.QMainWindow):
     def _on_step(self, n: int) -> None:
         self.lbl_step.setText(str(n))
 
-    @QtCore.pyqtSlot(float, float, float, float, float, float, float)
-    def _on_gripper(
-        self,
-        left_raw: float,
-        right_raw: float,
-        left_binary: float,
-        right_binary: float,
-        left_cmd: float,
-        right_cmd: float,
-        threshold: float,
-    ) -> None:
-        raw_text = f"L: {left_raw:.4f}   R: {right_raw:.4f}"
-        binary_text = f"L: {int(left_binary)}   R: {int(right_binary)}"
-        cmd_text = f"L: {left_cmd:.4f}   R: {right_cmd:.4f}   threshold: {threshold:.4f}"
-        self.lbl_gripper_raw_inline.setText(f"raw {raw_text} | bin {binary_text}")
-        self.lbl_gripper_raw.setText(raw_text)
-        self.lbl_gripper_binary.setText(binary_text)
-        self.lbl_gripper_cmd.setText(cmd_text)
+    @QtCore.pyqtSlot(float, float)
+    def _on_gripper(self, left: float, right: float) -> None:
+        self.lbl_gripper.setText(f"L: {left:.4f}   R: {right:.4f}")
 
     # ------------------------------------------------------------------ #
     @staticmethod
@@ -878,9 +832,6 @@ class EvalGUI(QtWidgets.QMainWindow):
         if self._handler is not None:
             self._handler.set_step_interval(n)
 
-    def _on_gripper_threshold_changed(self, value: float) -> None:
-        self._cfg.gripper_threshold = float(value)
-
     def _set_subtask(self, key: int) -> None:
         with self._runtime._lock:
             labels = dict(self._runtime.subtask_labels)
@@ -943,10 +894,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.lbl_prompt.setText("(idle)")
         self.lbl_subtask.setText("-")
         self.lbl_traj.setText("-")
-        self.lbl_gripper_raw_inline.setText("raw L: -   R: - | bin L: -   R: -")
-        self.lbl_gripper_raw.setText("L: -   R: -")
-        self.lbl_gripper_binary.setText("L: -   R: -")
-        self.lbl_gripper_cmd.setText("L: -   R: -")
+        self.lbl_gripper.setText("L: -   R: -")
         self.lbl_step.setText("0")
         blank_pm = __import__('PyQt5.QtGui', fromlist=['QPixmap']).QPixmap(
             self.lbl_subgoal.width(), self.lbl_subgoal.height())
@@ -1031,7 +979,6 @@ def main() -> None:
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--action_horizon", type=int, default=25)
     p.add_argument("--max_steps", type=int, default=1000)
-    p.add_argument("--gripper_threshold", type=float, default=2.0)
     p.add_argument("--dry_run", action="store_true")
     p.add_argument("--dump_dir", default="debug_inputs")
     p.add_argument("--log", default="INFO")
@@ -1045,7 +992,6 @@ def main() -> None:
         port=args.port,
         action_horizon=args.action_horizon,
         max_steps=args.max_steps,
-        gripper_threshold=args.gripper_threshold,
         dry_run=args.dry_run,
         dump_dir=args.dump_dir,
     )

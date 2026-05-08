@@ -120,30 +120,14 @@ test_video/banana_subtask_seg_lr5e5_5000_20260507_102100.mp4
 Videos are encoded as H.264 MP4 with `yuv420p` pixels and `+faststart`, so they
 can be opened directly in VS Code and browser-based players.
 
-## Binary Grippers
+## Continuous Grippers
 
-The runner displays the raw continuous model output, thresholded binary state,
-and final hardware command for both grippers in the GUI at every control step.
-The raw model output is interpreted as gripper opening width: larger values
-mean the gripper should be more open. Before sending commands to the robot it
-thresholds the two gripper action dimensions:
+The runner displays the continuous model output for both grippers in the GUI at
+every control step. It sends those continuous values directly to the robot,
+without applying a threshold:
 
-* left gripper raw output = action index `6`
-* right gripper raw output = action index `13`
-* raw value `> gripper_threshold` -> binary `1` (open)
-* raw value `<= gripper_threshold` -> binary `0` (close)
-
-The binary state is then mapped to the Piper hardware command values:
-
-* binary `1` -> `gripper_open` (default `4.0`)
-* binary `0` -> `gripper_close` (default `0.0`)
-
-The default threshold is `2.0`, and the GUI **Gripper threshold** spinbox can be
-adjusted while the run is active. You can also set the startup value with:
-
-```bash
---gripper_threshold 2.0
-```
+* left gripper action = action index `6`
+* right gripper action = action index `13`
 
 ## Prerequisites
 
