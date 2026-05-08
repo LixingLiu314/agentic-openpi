@@ -277,6 +277,19 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.btn_rtz.setStyleSheet("background:#c0392b;color:#fff;font-weight:bold;padding:6px;")
         self.btn_rtz.clicked.connect(self._on_rtz)
         btn_row.addWidget(self.btn_rtz)
+        self.btn_debug_gripper = QtWidgets.QPushButton("Debug Gripper")
+        self.btn_debug_gripper.setToolTip(
+            "Pause inference, return to zero, then send the selected continuous value to both grippers."
+        )
+        self.btn_debug_gripper.clicked.connect(self._on_debug_gripper)
+        btn_row.addWidget(self.btn_debug_gripper)
+        self.sp_debug_gripper = QtWidgets.QDoubleSpinBox()
+        self.sp_debug_gripper.setRange(0.0, 4.0)
+        self.sp_debug_gripper.setDecimals(4)
+        self.sp_debug_gripper.setSingleStep(0.01)
+        self.sp_debug_gripper.setValue(0.06)
+        self.sp_debug_gripper.setToolTip("Continuous gripper debug value sent after return-to-zero.")
+        btn_row.addWidget(self.sp_debug_gripper)
         self.btn_dump = QtWidgets.QPushButton("⬇ Dump inputs")
         self.btn_dump.setToolTip("Save the next inference's images + prompt to ./debug_inputs/")
         self.btn_dump.clicked.connect(self._on_dump)
@@ -908,6 +921,15 @@ class EvalGUI(QtWidgets.QMainWindow):
             self._log_error("Not connected — cannot return to zero. Click Connect first.")
             return
         self._runner.request_reset()
+
+    def _on_debug_gripper(self) -> None:
+        if self._runner is None:
+            self._log_error("Not connected — cannot debug gripper. Click Connect first.")
+            return
+        value = float(self.sp_debug_gripper.value())
+        self._runner.request_debug_gripper(value)
+        self.btn_pause.setText("▶ Resume")
+        self._log_info(f"Debug gripper requested with value {value:.4f}.")
 
     def _on_dump(self) -> None:
         if self._runner is None:

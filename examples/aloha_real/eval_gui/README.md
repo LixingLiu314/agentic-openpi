@@ -129,6 +129,11 @@ without applying a threshold:
 * left gripper action = action index `6`
 * right gripper action = action index `13`
 
+Set the numeric field beside **Debug Gripper** (default `0.06`) and click the
+button to pause inference, return the robot to zero, and send that direct
+continuous value to both grippers. This bypasses model inference and is intended
+only for hardware calibration/debugging.
+
 ## Prerequisites
 
 1. **Robot stack** (Piper ROS) up and homed.

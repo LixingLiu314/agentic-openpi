@@ -291,6 +291,7 @@ class EvalRunner:
         self._running = threading.Event()
         self._stop_evt = threading.Event()
         self._reset_evt = threading.Event()
+        self._manual_control_evt = threading.Event()
 
         # Guarantees we never call env.reset() and env.step() concurrently.
         self._env_lock = threading.Lock()
@@ -377,6 +378,7 @@ class EvalRunner:
             self._handler.reset()
         if self._broker is not None:
             self._broker.reset()
+        self._manual_control_evt.clear()
         self._runtime.clear()
 
     # ------------------------------------------------------------------ #
@@ -415,6 +417,51 @@ class EvalRunner:
         # Run on a small worker so the GUI doesn't block during the
         # ``reset_move_time`` interpolation.
         threading.Thread(target=_do_idle_reset, daemon=True, name="rtz-idle").start()
+
+    def request_debug_gripper(self, value: float = 0.06) -> None:
+        """Reset to home, then send a direct continuous gripper command."""
+        if self._env is None:
+            self._on_event("error", {"msg": "Cannot debug gripper: not connected. Click Connect first."})
+            return
+
+        value = float(value)
+        self._manual_control_evt.set()
+        self._running.clear()
+        self._runtime.wake_subtask_waiters()
+        self._on_event(
+            "info",
+            {"msg": f"Debug gripper armed: paused inference, resetting, then sending {value:.4f}."},
+        )
+
+        def _do_debug_gripper() -> None:
+            try:
+                with self._env_lock:
+                    reset_ts = self._env.reset()
+                    obs = getattr(reset_ts, "observation", None) or self._env.get_observation()
+                    action = np.asarray(obs.get("qpos", []), dtype=np.float32).copy()
+                    if action.ndim != 1 or action.size < 14:
+                        raise RuntimeError("Cannot build debug gripper command: reset observation qpos is not 14-dim")
+                    action = action[:14].copy()
+                    action[6] = value
+                    action[13] = value
+                    step_ts = self._env.step(action)
+                    obs_after = getattr(step_ts, "observation", None) or self._env.get_observation()
+                if self._broker is not None:
+                    self._broker.reset()
+                with self._obs_lock:
+                    self._latest_obs = obs_after
+                self._emit_gripper_status(action)
+                self._on_event(
+                    "info",
+                    {"msg": f"Debug gripper sent continuous value {value:.4f} to both grippers after reset."},
+                )
+            except Exception as e:                       # noqa: BLE001
+                logger.exception("debug gripper failed")
+                self._on_event("error", {"msg": f"Debug gripper failed: {e}"})
+            finally:
+                self._manual_control_evt.clear()
+
+        threading.Thread(target=_do_debug_gripper, daemon=True, name="debug-gripper").start()
 
     # ------------------------------------------------------------------ #
     def request_dump(self) -> None:
@@ -582,6 +629,8 @@ class EvalRunner:
                     if self._stop_evt.is_set():
                         break
                     if not self._running.is_set():
+                        continue
+                    if self._manual_control_evt.is_set():
                         continue
                     action_arr = np.asarray(action["actions"], dtype=np.float32)
                     self._emit_gripper_status(action_arr)
