@@ -61,24 +61,24 @@ _MODE_DESCRIPTIONS = {
 
 _POLICY_PRESETS = {
     "basic": {
-        "label": "basic - banana baseline",
-        "config": "pi05_aloha_banana",
-        "dir": "checkpoints/pi05_aloha_banana/banana_baseline/{step}",
+        "label": "basic - eggplant baseline",
+        "config": "pi05_aloha_eggplant_baseline",
+        "dir": "checkpoints/pi05_aloha_eggplant_baseline/eggplant_baseline/{step}",
     },
     "traj": {
-        "label": "traj - Doubao trajectory",
-        "config": "pi05_aloha_banana_traj",
-        "dir": "checkpoints/pi05_aloha_banana_traj/banana_traj_lr5e5/{step}",
+        "label": "traj - eggplant baseline",
+        "config": "pi05_aloha_eggplant_baseline",
+        "dir": "checkpoints/pi05_aloha_eggplant_baseline/eggplant_baseline/{step}",
     },
     "subtask": {
-        "label": "subtask - segment labels",
-        "config": "pi05_aloha_banana_subtask_segment",
-        "dir": "checkpoints/pi05_aloha_banana_subtask_segment/banana_subtask_seg_lr5e5/{step}",
+        "label": "subtask - eggplant labels",
+        "config": "pi05_aloha_eggplant_subtask",
+        "dir": "checkpoints/pi05_aloha_eggplant_subtask/eggplant_subtask/{step}",
     },
     "subgoal": {
-        "label": "subgoal - base camera",
-        "config": "pi05_aloha_banana_subgoal_base",
-        "dir": "checkpoints/pi05_aloha_banana_subgoal_base/banana_subgoal_base_lr5e5/{step}",
+        "label": "subgoal - eggplant base camera",
+        "config": "pi05_aloha_eggplant_subgoal_base",
+        "dir": "checkpoints/pi05_aloha_eggplant_subgoal_base/eggplant_subgoal_2s/{step}",
     },
 }
 
