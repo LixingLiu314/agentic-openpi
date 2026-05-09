@@ -179,3 +179,7 @@ checkpoints/
 checkpoints
 debug_inputs/
 test_video/
+aloha_lerobot_all_cot/
+aloha_cube/
+aloha_merged_banana_cube/
+traj_data/
