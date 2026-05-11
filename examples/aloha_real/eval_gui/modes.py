@@ -10,8 +10,7 @@ That means the handler must do the work of those repack transforms itself:
 
   * basic   -- raw {state, images}; server uses ``--default-prompt``.
   * traj    -- prompt = ``"<task>, traj: Left: Go along ... Right: Go along
-               ..."`` with any ``<br>`` separators stripped before sending to
-               the VLA.
+               ..."``.
   * subtask -- prompt = ``"<task>, subtask: <label>"`` (mirrors
                ``_transforms.AppendSubtaskToPrompt`` exactly). Labels are
                user-editable and the keys 1..4 select among them.
@@ -43,19 +42,21 @@ from openpi_client import image_tools
 logger = logging.getLogger(__name__)
 
 
-_BR_TAG_RE = re.compile(r"<\s*br\s*/?\s*>", re.IGNORECASE)
-
 
 # ---------------------------------------------------------------------------
-# Default subtask label mapping for the banana two-tasks dataset.
-# These keys (1-4) match the labels written by ``scripts/preprocess_subtask.py``.
+# Default subtask label mapping for the eggplant task.
+# These keys (1-8) match the operator controls in subtask mode.
 # At runtime the user can edit them in the GUI or load a JSON override.
 # ---------------------------------------------------------------------------
 DEFAULT_SUBTASK_LABELS: Dict[int, str] = {
-    1: "reach the banana",
-    2: "grasp the banana",
-    3: "move the banana to the green plate",
-    4: "place the banana in the green plate",
+    1: "reach the handle of the lid",
+    2: "Grasp the handle of the lid",
+    3: "Move away the lid",
+    4: "reach the eggplant",
+    5: "grasp the eggplant",
+    6: "Move the eggplant on the box",
+    7: "Release the eggplant to the box",
+    8: "Put the lid on the box",
 }
 
 
@@ -64,11 +65,6 @@ def to_chw_uint8(img_hwc_rgb: np.ndarray, h: int = 224, w: int = 224) -> np.ndar
     img = image_tools.convert_to_uint8(image_tools.resize_with_pad(img_hwc_rgb, h, w))
     return einops.rearrange(img, "h w c -> c h w")
 
-
-def clean_trajectory_prompt_text(loc_token_text: str) -> str:
-    """Remove HTML break tags while preserving Paligemma ``<locXXXX>`` tokens."""
-    text = _BR_TAG_RE.sub(" ", loc_token_text or "")
-    return re.sub(r"\s+", " ", text).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +459,7 @@ class SubtaskMode(ModeHandler):
 
 # ---------------------------------------------------------------------------
 class TrajectoryMode(ModeHandler):
-    """Mode 2: prompt = f"{task}, traj: <clean L/R loc-token text>"."""
+    """Mode 2: prompt = f"{task}, traj: <L/R loc-token text>"."""
 
     name = "traj"
 
@@ -571,9 +567,8 @@ class TrajectoryMode(ModeHandler):
     ) -> None:
         if pred is None or pred.is_empty():
             return
-        traj_text = pred.to_loc_token_text()
-        prompt_traj_text = clean_trajectory_prompt_text(traj_text)
-        traj_image = self._render_trajectory_image(image, traj_text)
+        prompt_traj_text = pred.to_loc_token_text()
+        traj_image = self._render_trajectory_image(image, prompt_traj_text)
         with runtime._lock:
             runtime.last_traj_text = prompt_traj_text
             runtime.last_traj_image = traj_image
@@ -612,13 +607,12 @@ class TrajectoryMode(ModeHandler):
             prompt = task
             traj_image = None
         else:
-            traj_text = pred.to_loc_token_text()
-            prompt_traj_text = clean_trajectory_prompt_text(traj_text)
+            prompt_traj_text = pred.to_loc_token_text()
             prompt = f"{task}, traj: {prompt_traj_text}"
-            traj_image = self._render_trajectory_image(cam_high, traj_text)
+            traj_image = self._render_trajectory_image(cam_high, prompt_traj_text)
 
         with runtime._lock:
-            runtime.last_traj_text = clean_trajectory_prompt_text(traj_text)
+            runtime.last_traj_text = prompt_traj_text
             runtime.last_traj_image = traj_image
             runtime.last_prompt = prompt
         obs["prompt"] = prompt

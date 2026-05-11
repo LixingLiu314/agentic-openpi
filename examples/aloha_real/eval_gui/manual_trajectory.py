@@ -11,16 +11,16 @@ def pixel_to_loc_tokens(x: float, y: float, image_width: int, image_height: int)
     """Map image pixel coordinates to Paligemma ``<locXXXX><locYYYY>`` tokens.
 
     The inverse mapping is used by ``trajectory_visualizer``:
-    ``pixel = loc / 1023 * (image_size - 1)``.
+    ``pixel = loc / 1000 * (image_size - 1)``.
     """
     width = max(1, int(image_width))
     height = max(1, int(image_height))
     x_clamped = min(max(float(x), 0.0), float(width - 1))
     y_clamped = min(max(float(y), 0.0), float(height - 1))
-    loc_x = int(round(x_clamped / max(1, width - 1) * 1023.0))
-    loc_y = int(round(y_clamped / max(1, height - 1) * 1023.0))
-    loc_x = max(0, min(loc_x, 1023))
-    loc_y = max(0, min(loc_y, 1023))
+    loc_x = int(round(x_clamped / max(1, width - 1) * 1000.0))
+    loc_y = int(round(y_clamped / max(1, height - 1) * 1000.0))
+    loc_x = max(0, min(loc_x, 1000))
+    loc_y = max(0, min(loc_y, 1000))
     return f"<loc{loc_x:04d}><loc{loc_y:04d}>"
 
 

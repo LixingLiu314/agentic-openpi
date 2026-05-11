@@ -128,8 +128,11 @@ Each evaluation run automatically records the main camera (`cam_high`) to:
 test_video/
 ```
 
-Recording starts when the run loop starts and stops when the episode ends or
-you click **Stop**. File names include the selected checkpoint name and a
+Recording starts when the run starts and stops when the episode ends or you
+click **Stop**. A background sampler records `cam_high` at the configured video
+FPS independently of the VLA control loop, so blocking waits for manual
+trajectory annotation, Doubao, ForeAct, pause/resume, or reset do not create
+missing video spans. File names include the selected checkpoint name and a
 timestamp, for example:
 
 ```
@@ -138,6 +141,18 @@ test_video/banana_subtask_seg_lr5e5_5000_20260507_102100.mp4
 
 Videos are encoded as H.264 MP4 with `yuv420p` pixels and `+faststart`, so they
 can be opened directly in VS Code and browser-based players.
+
+Each run also writes an append-only VLA input log next to the video:
+
+```
+test_video/banana_subtask_seg_lr5e5_5000_20260507_102100_log.jsonl
+test_video/banana_subtask_seg_lr5e5_5000_20260507_102100_step_00000_subgoal.jpg
+```
+
+The JSONL file has one entry per actual VLA server inference request. Each
+entry includes the control `step`, `inference_index`, exact `text_prompt`,
+state vector, model image keys/shapes, runtime mode metadata, and any saved
+ForeAct subgoal image path.
 
 ## Continuous Grippers
 
@@ -198,6 +213,10 @@ Implemented identically to `scripts/eval_banana.sh --reset-only` (which calls
   `env.reset()` under an env-lock.
 
 ## Model-input inspection
+
+The automatic `test_video/*_log.jsonl` file is the lightweight per-run trace of
+every VLA inference input. It is intended for comparing prompts, states, modes,
+and ForeAct subgoal images across a full episode.
 
 Click **⬇ Dump inputs** (or press **D**) at any time. The next inference
 call snapshots the *exact post-repack* payload to disk:

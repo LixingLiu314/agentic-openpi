@@ -61,6 +61,15 @@ class RunnerConfig:
     video_dir: str = "test_video"
     video_name: str = "eval"
     video_fps: float = _DEFAULT_HZ
+    log_model_inputs: bool = True
+
+
+def _safe_filename_part(text: str) -> str:
+    cleaned = "".join(
+        ch if ch.isalnum() or ch in "._-" else "_"
+        for ch in str(text).strip()
+    )
+    return (cleaned.strip("._-") or "eval")[:160]
 
 
 class _VideoRecorder:
@@ -219,6 +228,217 @@ class _VideoRecorder:
             self._finish_process()
 
 
+class _ContinuousVideoRecorder:
+    """Samples the latest camera frame at a fixed rate and streams it to MP4."""
+
+    def __init__(
+        self,
+        path: pathlib.Path,
+        fps: float,
+        obs_provider: Callable[[], Optional[dict]],
+        obs_callback: Callable[[dict], None],
+        *,
+        camera_key: str = "cam_high",
+    ) -> None:
+        self.path = path
+        self._fps = max(1.0, float(fps))
+        self._obs_provider = obs_provider
+        self._obs_callback = obs_callback
+        self._camera_key = camera_key
+        self._writer = _VideoRecorder(path=path, fps=self._fps)
+        self._stop_evt = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="eval-video-sampler")
+        self._lock = threading.Lock()
+        self._started = False
+        self._stopped = False
+        self._dropped = 0
+        self._sampler_error = ""
+
+    def start(self) -> None:
+        with self._lock:
+            if self._started:
+                return
+            self._writer.start()
+            self._started = True
+            self._thread.start()
+
+    def stop(self) -> int:
+        with self._lock:
+            if self._stopped:
+                return self._dropped
+            self._stopped = True
+            started = self._started
+        if not started:
+            return self._dropped
+        self._stop_evt.set()
+        self._thread.join(timeout=5.0)
+        if self._thread.is_alive():
+            self._sampler_error = "video sampler did not finish within 5 seconds"
+        self._dropped = self._writer.stop()
+        return self._dropped
+
+    @property
+    def error(self) -> str:
+        parts = [self._sampler_error, self._writer.error]
+        return "; ".join(part for part in parts if part)
+
+    def _run(self) -> None:
+        period = 1.0 / self._fps
+        next_tick = time.monotonic()
+        last_frame: Optional[np.ndarray] = None
+
+        while not self._stop_evt.is_set():
+            try:
+                obs = self._obs_provider()
+                if obs is not None:
+                    self._obs_callback(obs)
+                    frame = (obs.get("images") or {}).get(self._camera_key)
+                    if frame is not None:
+                        last_frame = frame
+            except Exception as e:                       # noqa: BLE001
+                if not self._sampler_error:
+                    self._sampler_error = f"video sampler failed to read observation: {e}"
+
+            if last_frame is not None:
+                self._writer.write(last_frame)
+
+            next_tick += period
+            delay = next_tick - time.monotonic()
+            if delay <= 0:
+                next_tick = time.monotonic()
+                continue
+            self._stop_evt.wait(delay)
+
+
+class _StepInputLogger:
+    """Append-only JSONL logger for the exact payload sent to each VLA infer."""
+
+    def __init__(self, path: pathlib.Path, artifact_prefix: str) -> None:
+        self.path = path
+        self._artifact_prefix = artifact_prefix
+        self._fh = None
+        self._lock = threading.Lock()
+        self._closed = False
+        self._error = ""
+
+    def start(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = self.path.open("w", encoding="utf-8")
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            if self._fh is not None:
+                self._fh.close()
+                self._fh = None
+
+    @property
+    def error(self) -> str:
+        return self._error
+
+    def log(
+        self,
+        payload: Dict[str, Any],
+        raw_obs: Dict[str, Any],
+        *,
+        step: int,
+        inference_index: int,
+        mode: str,
+        runtime_snapshot: Dict[str, Any],
+        cfg: RunnerConfig,
+    ) -> None:
+        subgoal_paths: Dict[str, str] = {}
+        subgoal_shapes: Dict[str, list[int]] = {}
+        subgoal_images = payload.get("subgoal_images") or {}
+        for cam, image in subgoal_images.items():
+            arr = np.asarray(image)
+            subgoal_shapes[str(cam)] = list(arr.shape)
+            try:
+                image_path = self._subgoal_image_path(step, inference_index, str(cam), len(subgoal_images))
+                self._write_rgb_image(image_path, arr)
+                subgoal_paths[str(cam)] = str(image_path)
+            except Exception as e:                       # noqa: BLE001
+                self._error = f"failed to save subgoal image: {e}"
+
+        state = np.asarray(payload.get("state", []), dtype=np.float32).reshape(-1)
+        images = payload.get("images") or {}
+        raw_images = (raw_obs.get("images") or {}) if isinstance(raw_obs, dict) else {}
+        runtime_meta = {
+            "task": runtime_snapshot.get("task", ""),
+            "subtask_key": runtime_snapshot.get("subtask_key"),
+            "subtask_label": runtime_snapshot.get("subtask_label", ""),
+            "traj_text": runtime_snapshot.get("traj_text", ""),
+            "manual_traj_override": bool(runtime_snapshot.get("manual_traj_override", False)),
+            "waiting_for_subtask_input": bool(runtime_snapshot.get("waiting_for_subtask_input", False)),
+        }
+        entry = {
+            "type": "vla_input",
+            "inference_index": int(inference_index),
+            "step": int(step),
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp_unix": time.time(),
+            "mode": mode,
+            "text_prompt": str(payload.get("prompt", "") or ""),
+            "state": state.tolist(),
+            "state_shape": list(state.shape),
+            "image_keys": list(images.keys()),
+            "image_shapes": {str(k): list(np.asarray(v).shape) for k, v in images.items()},
+            "subgoal_image_keys": list(subgoal_images.keys()),
+            "subgoal_image_shapes": subgoal_shapes,
+            "subgoal_image_paths": subgoal_paths,
+            "raw_image_shapes": {str(k): list(np.asarray(v).shape) for k, v in raw_images.items()},
+            "runtime": runtime_meta,
+            "config": {
+                "action_horizon": int(cfg.action_horizon),
+                "max_hz": float(cfg.max_hz),
+                "video_fps": float(cfg.video_fps),
+            },
+        }
+        line = json.dumps(entry, ensure_ascii=False, sort_keys=True)
+        with self._lock:
+            if self._closed or self._fh is None:
+                return
+            self._fh.write(line + "\n")
+            self._fh.flush()
+
+    def _subgoal_image_path(
+        self,
+        step: int,
+        inference_index: int,
+        cam: str,
+        num_subgoals: int,
+    ) -> pathlib.Path:
+        safe_cam = _safe_filename_part(cam)
+        if num_subgoals == 1 and safe_cam == "cam_high":
+            name = f"{self._artifact_prefix}_step_{step:05d}_subgoal.jpg"
+        else:
+            name = f"{self._artifact_prefix}_step_{step:05d}_subgoal_{safe_cam}.jpg"
+        candidate = self.path.parent / name
+        if not candidate.exists():
+            return candidate
+        stem = candidate.stem
+        suffix = candidate.suffix
+        return candidate.with_name(f"{stem}_infer_{inference_index:04d}{suffix}")
+
+    @staticmethod
+    def _write_rgb_image(path: pathlib.Path, image: np.ndarray) -> None:
+        import cv2
+
+        arr = np.asarray(image)
+        if arr.ndim == 3 and arr.shape[0] in (1, 3) and arr.shape[-1] not in (1, 3):
+            arr = np.transpose(arr, (1, 2, 0))
+        if arr.dtype != np.uint8:
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+        if arr.ndim == 3 and arr.shape[2] == 1:
+            arr = arr[:, :, 0]
+        out = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR) if arr.ndim == 3 and arr.shape[2] == 3 else arr
+        ok = cv2.imwrite(str(path), out)
+        if not ok:
+            raise RuntimeError(f"cv2.imwrite returned false for {path}")
+
+
 class _BrokerAdapter:
     """Adapts ``ModeHandler.build_obs`` -> ``BasePolicy.infer`` for the broker.
 
@@ -248,6 +468,10 @@ class _BrokerAdapter:
             except Exception as e:                       # noqa: BLE001
                 logger.warning("Input dump failed: %s", e)
             self._runner._pending_dump = False
+        try:
+            self._runner._log_model_input(payload, raw_obs)
+        except Exception as e:                           # noqa: BLE001
+            logger.warning("Input log failed: %s", e)
         return self._ws_policy.infer(payload)
 
     def reset(self):
@@ -302,6 +526,10 @@ class EvalRunner:
 
         self._pending_dump = False
         self._dump_counter = 0
+        self._input_log_counter = 0
+        self._artifact_lock = threading.Lock()
+        self._video_recorder: Optional[_ContinuousVideoRecorder] = None
+        self._input_logger: Optional[_StepInputLogger] = None
 
     # ------------------------------------------------------------------ #
     def connect(self) -> dict:
@@ -372,6 +600,7 @@ class EvalRunner:
         self._runtime.wake_subtask_waiters()
         if self._thread is not None:
             self._thread.join(timeout=5.0)
+        self._stop_active_artifacts()
         # ---- full state clear so the next Start is a clean run ---- #
         self._step_count = 0
         with self._handler_lock:
@@ -522,10 +751,41 @@ class EvalRunner:
         (sub / "meta.json").write_text(json.dumps(meta, indent=2))
         self._on_event("info", {"msg": f"Dumped model inputs -> {sub}"})
 
+    def _log_model_input(self, payload: Dict[str, Any], raw_obs: Dict[str, Any]) -> None:
+        with self._artifact_lock:
+            input_logger = self._input_logger
+            inference_index = self._input_log_counter
+            self._input_log_counter += 1
+        if input_logger is None:
+            return
+        with self._handler_lock:
+            mode = self._handler.name
+        input_logger.log(
+            payload,
+            raw_obs,
+            step=self._step_count,
+            inference_index=inference_index,
+            mode=mode,
+            runtime_snapshot=self._runtime.snapshot(),
+            cfg=self._cfg,
+        )
+
     # ------------------------------------------------------------------ #
     def latest_obs(self) -> Optional[dict]:
         with self._obs_lock:
             return self._latest_obs
+
+    def _store_latest_obs(self, obs: dict) -> None:
+        with self._obs_lock:
+            self._latest_obs = obs
+
+    def _recording_observation(self) -> Optional[dict]:
+        if self._env is None:
+            return None
+        # get_observation() only snapshots the latest ROS sensor data. Keep it
+        # outside _env_lock so video sampling continues during reset/step waits
+        # and during blocking Doubao/ForeAct/manual annotation calls.
+        return self._env.get_observation()
 
     @property
     def step_count(self) -> int:
@@ -546,36 +806,93 @@ class EvalRunner:
             },
         )
 
-    def _start_video_recorder(self) -> Optional[_VideoRecorder]:
+    def _episode_artifact_prefix(self) -> str:
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        stem = _safe_filename_part(self._cfg.video_name or "eval")
+        return f"{stem}_{ts}"
+
+    def _start_video_recorder(self, artifact_prefix: str) -> Optional[_ContinuousVideoRecorder]:
         if not self._cfg.record_video:
             return None
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        stem = self._cfg.video_name.strip() or "eval"
-        path = pathlib.Path(self._cfg.video_dir) / f"{stem}_{ts}.mp4"
+        path = pathlib.Path(self._cfg.video_dir) / f"{artifact_prefix}.mp4"
         try:
-            recorder = _VideoRecorder(path=path, fps=max(1.0, float(self._cfg.video_fps)))
+            recorder = _ContinuousVideoRecorder(
+                path=path,
+                fps=max(1.0, float(self._cfg.video_fps)),
+                obs_provider=self._recording_observation,
+                obs_callback=self._store_latest_obs,
+            )
             recorder.start()
         except Exception as e:                       # noqa: BLE001
             logger.warning("Video recording disabled: %s", e)
             self._on_event("error", {"msg": f"Video recording disabled: {e}"})
             return None
-        self._on_event("info", {"msg": f"Recording main camera video -> {path}"})
+        self._on_event("info", {"msg": f"Recording continuous main camera video -> {path}"})
         return recorder
+
+    def _start_input_logger(self, artifact_prefix: str) -> Optional[_StepInputLogger]:
+        if not self._cfg.log_model_inputs:
+            return None
+        path = pathlib.Path(self._cfg.video_dir) / f"{artifact_prefix}_log.jsonl"
+        try:
+            input_logger = _StepInputLogger(path=path, artifact_prefix=artifact_prefix)
+            input_logger.start()
+        except Exception as e:                       # noqa: BLE001
+            logger.warning("Model-input logging disabled: %s", e)
+            self._on_event("error", {"msg": f"Model-input logging disabled: {e}"})
+            return None
+        self._on_event("info", {"msg": f"Logging VLA inputs -> {path}"})
+        return input_logger
+
+    def _stop_active_artifacts(self) -> None:
+        with self._artifact_lock:
+            recorder = self._video_recorder
+            input_logger = self._input_logger
+            self._video_recorder = None
+            self._input_logger = None
+
+        if input_logger is not None:
+            input_logger.close()
+            msg = f"Saved VLA input log -> {input_logger.path}"
+            if input_logger.error:
+                msg += f" ({input_logger.error})"
+            self._on_event("info", {"msg": msg})
+
+        if recorder is not None:
+            dropped = recorder.stop()
+            if recorder.path.exists() and recorder.path.stat().st_size > 0:
+                msg = f"Saved main camera video -> {recorder.path}"
+            else:
+                msg = f"Video recording ended without a saved file -> {recorder.path}"
+            if recorder.error:
+                msg += f" ({recorder.error})"
+            if dropped:
+                msg += f" ({dropped} frames dropped)"
+            self._on_event("info", {"msg": msg})
 
     # ------------------------------------------------------------------ #
     def _run_loop(self) -> None:
         period = 1.0 / max(1.0, self._cfg.max_hz)
-        try:
-            with self._env_lock:
-                self._env.reset()
-            self._on_event("episode_start", {})
-        except Exception as e:                          # noqa: BLE001
-            logger.exception("Reset failed")
-            self._on_event("error", {"msg": f"Reset failed: {e}"})
-            return
+        self._input_log_counter = 0
+        artifact_prefix = self._episode_artifact_prefix()
+        recorder = self._start_video_recorder(artifact_prefix)
+        input_logger = self._start_input_logger(artifact_prefix)
+        with self._artifact_lock:
+            self._video_recorder = recorder
+            self._input_logger = input_logger
 
-        recorder = self._start_video_recorder()
+        episode_started = False
         try:
+            try:
+                with self._env_lock:
+                    self._env.reset()
+                episode_started = True
+                self._on_event("episode_start", {})
+            except Exception as e:                          # noqa: BLE001
+                logger.exception("Reset failed")
+                self._on_event("error", {"msg": f"Reset failed: {e}"})
+                return
+
             while not self._stop_evt.is_set() and self._step_count < self._cfg.max_steps:
                 if self._reset_evt.is_set():
                     self._reset_evt.clear()
@@ -607,8 +924,6 @@ class EvalRunner:
                         raw_obs = self._env.get_observation()
                     with self._obs_lock:
                         self._latest_obs = raw_obs
-                    if recorder is not None:
-                        recorder.write((raw_obs.get("images") or {}).get("cam_high"))
 
                     with self._handler_lock:
                         handler = self._handler
@@ -648,15 +963,6 @@ class EvalRunner:
                 if elapsed < period:
                     time.sleep(period - elapsed)
         finally:
-            if recorder is not None:
-                dropped = recorder.stop()
-                if recorder.path.exists() and recorder.path.stat().st_size > 0:
-                    msg = f"Saved main camera video -> {recorder.path}"
-                else:
-                    msg = f"Video recording ended without a saved file -> {recorder.path}"
-                if recorder.error:
-                    msg += f" ({recorder.error})"
-                if dropped:
-                    msg += f" ({dropped} frames dropped)"
-                self._on_event("info", {"msg": msg})
-        self._on_event("episode_end", {"steps": self._step_count})
+            self._stop_active_artifacts()
+        if episode_started:
+            self._on_event("episode_end", {"steps": self._step_count})

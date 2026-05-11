@@ -1,30 +1,3 @@
-"""PyQt5 GUI for the Aloha real-robot evaluation pipeline.
-
-Layout (left = controls; right = camera views)
-    [Mode v]   [help text]
-    Task: [.................................]
-    Policy host:[.....] port:[..]  [Connect]
-    ForeAct:[.....] port:[..]  chunk:[..]  max_steps:[..]
-    Sub-mode: ( ) blocking  ( ) non-blocking      step interval: [..]
-    [Start] [Pause] [Stop]   [回零]   [Dump inputs]
-
-    Subtask labels (editable):
-       1: [reach_the_banana_end                  ]
-       2: [grasp_the_banana_end                  ]
-       3: [move_the_banana_to_the_green_plate_end]
-       4: [place_the_banana_in_the_green_plate_end]
-       [Add] [Remove] [Load JSON ...]    Doubao auto-suggest: [ ]
-
-    Runtime info: prompt / subtask / traj / step
-    Log pane
-
-Keyboard:
-    1-9           -> subtask key (only mode 3; use row buttons for 10+)
-    Space         -> pause / resume
-    H             -> 回零
-    D             -> dump model inputs
-    Q             -> quit
-"""
 from __future__ import annotations
 
 import json
@@ -55,7 +28,7 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _MODE_DESCRIPTIONS = {
     "basic":   "Basic — VLA inference with task prompt only.",
     "traj":    "Add Trajectory — Doubao predicts L/R waypoints (loc-tokens).",
-    "subtask": "Add Subtasks — keys 1/2/3/4 override the subtask label.",
+    "subtask": "Add Subtasks — keys 1-8 override the subtask label.",
     "subgoal": "Add Subgoal Images — ForeAct generates cam_high subgoal.",
 }
 
@@ -63,22 +36,22 @@ _POLICY_PRESETS = {
     "basic": {
         "label": "basic - eggplant baseline",
         "config": "pi05_aloha_eggplant_baseline",
-        "dir": "checkpoints/pi05_aloha_eggplant_baseline/eggplant_baseline/{step}",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/pi05_aloha_eggplant_baseline/eggplant_potato_lr2_5_bseline/{step}",
     },
     "traj": {
         "label": "traj - eggplant baseline",
         "config": "pi05_aloha_eggplant_baseline",
-        "dir": "checkpoints/pi05_aloha_eggplant_baseline/eggplant_baseline/{step}",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/pi05_aloha_eggplant_traj/{step}",
     },
     "subtask": {
         "label": "subtask - eggplant labels",
         "config": "pi05_aloha_eggplant_subtask",
-        "dir": "checkpoints/pi05_aloha_eggplant_subtask/eggplant_subtask/{step}",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/pi05_aloha_eggplant_subtask/{step}",
     },
     "subgoal": {
         "label": "subgoal - eggplant base camera",
         "config": "pi05_aloha_eggplant_subgoal_base",
-        "dir": "checkpoints/pi05_aloha_eggplant_subgoal_base/eggplant_subgoal_2s/{step}",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/pi05_aloha_eggplant_subgoal",
     },
 }
 
@@ -791,14 +764,48 @@ class EvalGUI(QtWidgets.QMainWindow):
         preset = _POLICY_PRESETS.get(mode, _POLICY_PRESETS["basic"])
         return preset["dir"].format(step=int(self.sp_ckpt_step.value()))
 
-    def _checkpoint_items_for_mode(self, mode: str) -> list[str]:
-        default = self._default_checkpoint_for_mode(mode)
+    @staticmethod
+    def _checkpoint_task_markers(text: str) -> set[str]:
+        lowered = text.lower()
+        return {name for name in ("banana", "cube", "eggplant") if name in lowered}
+
+    @staticmethod
+    def _local_checkpoint_exists(path: str) -> bool:
+        if path.startswith("gs://"):
+            return True
+        candidate = pathlib.Path(path).expanduser()
+        resolved = candidate if candidate.is_absolute() else _REPO_ROOT / candidate
+        return resolved.exists()
+
+    def _checkpoint_matches_mode(self, mode: str, path: str) -> bool:
+        preset = _POLICY_PRESETS.get(mode, _POLICY_PRESETS["basic"])
+        preset_markers = self._checkpoint_task_markers(
+            f"{preset['config']} {preset['dir']}"
+        )
+        path_markers = self._checkpoint_task_markers(path)
+        return not preset_markers or not path_markers or bool(preset_markers & path_markers)
+
+    def _checkpoint_history_candidates_for_mode(self, mode: str) -> list[str]:
         items = []
         candidates = [
             self._last_checkpoint_by_mode.get(mode, ""),
-            default,
             *self._checkpoint_history.get(mode, []),
         ]
+        for value in candidates:
+            value = value.strip()
+            if (
+                value
+                and value not in items
+                and self._checkpoint_matches_mode(mode, value)
+                and self._local_checkpoint_exists(value)
+            ):
+                items.append(value)
+        return items
+
+    def _checkpoint_items_for_mode(self, mode: str) -> list[str]:
+        default = self._default_checkpoint_for_mode(mode)
+        items = []
+        candidates = [*self._checkpoint_history_candidates_for_mode(mode), default]
         for value in candidates:
             value = value.strip()
             if value and value not in items:
@@ -820,12 +827,14 @@ class EvalGUI(QtWidgets.QMainWindow):
         current = self._checkpoint_text() if hasattr(self, "cb_checkpoint") else ""
         if select is None:
             if prefer_history:
-                select = (
-                    self._last_checkpoint_by_mode.get(mode)
-                    or next(iter(self._checkpoint_history.get(mode, [])), "")
-                    or default
-                )
-            elif not current or current == previous_default:
+                history_candidates = self._checkpoint_history_candidates_for_mode(mode)
+                select = next(iter(history_candidates), "") or default
+            elif (
+                not current
+                or current == previous_default
+                or not self._checkpoint_matches_mode(mode, current)
+                or not self._local_checkpoint_exists(current)
+            ):
                 select = default
             else:
                 select = current
@@ -1350,7 +1359,7 @@ def main() -> None:
 
     p = argparse.ArgumentParser(description="Aloha eval GUI")
     p.add_argument("--mode", default="basic", choices=["basic", "traj", "subtask", "subgoal"])
-    p.add_argument("--task", default="put banana in the green plate")
+    p.add_argument("--task", default="put the eggplant into the box")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--action_horizon", type=int, default=25)

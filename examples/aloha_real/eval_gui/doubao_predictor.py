@@ -6,7 +6,7 @@ task description, asks Doubao to produce a per-arm motion plan in the
 ``scripts/preprocess_traj.py``):
 
     Left: Go along (xL,yL), (xL,yL), close gripper, (xL,yL).
-    Right: Go along <br/>  (xR,yR), (xR,yR), close gripper, (xR,yR)
+    Right: Go along (xR,yR), (xR,yR), close gripper, (xR,yR)
 
 After the model returns this CoT string, ``coords_to_loc_tokens`` replaces
 each ``(x, y)`` with PaliGemma ``<loc{x:04d}><loc{y:04d}>`` tokens — using
@@ -46,8 +46,8 @@ def coords_to_loc_tokens(text: str) -> str:
     Mirrors ``scripts/preprocess_traj.py:coords_to_loc_tokens`` exactly.
     """
     def replace(m: re.Match) -> str:
-        x = max(0, min(int(m.group(1)), 1023))
-        y = max(0, min(int(m.group(2)), 1023))
+        x = max(0, min(int(m.group(1)), 1000))
+        y = max(0, min(int(m.group(2)), 1000))
         return f"<loc{x:04d}><loc{y:04d}>"
     return _COORD_RE.sub(replace, text)
 
@@ -59,7 +59,7 @@ def coords_to_loc_tokens(text: str) -> str:
 # expected by the trajectory visualizer and parsers. The GUI sanitizes any
 # HTML break tags before the text is passed to the VLA prompt.
 TRAJ_LEFT_PREFIX = "Left: Go along "
-TRAJ_RIGHT_PREFIX = ". Right: Go along <br/>  "   # NB: two spaces after <br/>
+TRAJ_RIGHT_PREFIX = ". Right: Go along "
 
 
 def format_traj_string(left_items: List[str], right_items: List[str]) -> str:
