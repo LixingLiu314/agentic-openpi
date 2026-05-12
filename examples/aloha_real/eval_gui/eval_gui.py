@@ -51,7 +51,7 @@ _POLICY_PRESETS = {
     "subgoal": {
         "label": "subgoal - eggplant base camera",
         "config": "pi05_aloha_eggplant_subgoal_base",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/pi05_aloha_eggplant_subgoal",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/pi05_aloha_eggplant_subgoal_base/{step}",
     },
 }
 
@@ -426,6 +426,18 @@ class EvalGUI(QtWidgets.QMainWindow):
         checkpoint_row.addWidget(self.btn_browse_checkpoint)
         left.addLayout(checkpoint_row)
 
+        output_row = QtWidgets.QHBoxLayout()
+        output_row.addWidget(QtWidgets.QLabel("output dir:"))
+        initial_output_dir = str(pathlib.Path(self._cfg.video_dir).expanduser()) if self._cfg.video_dir else ""
+        self.le_output_dir = QtWidgets.QLineEdit(initial_output_dir)
+        self.le_output_dir.setPlaceholderText("Choose output directory before Start")
+        output_row.addWidget(self.le_output_dir, 1)
+        self.btn_browse_output_dir = QtWidgets.QPushButton("Browse...")
+        self.btn_browse_output_dir.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DirOpenIcon))
+        self.btn_browse_output_dir.clicked.connect(self._on_browse_output_dir)
+        output_row.addWidget(self.btn_browse_output_dir)
+        left.addLayout(output_row)
+
         # Server connection
         srv_row = QtWidgets.QHBoxLayout()
         srv_row.addWidget(QtWidgets.QLabel("Policy host:"))
@@ -754,11 +766,16 @@ class EvalGUI(QtWidgets.QMainWindow):
             name = f"{parent}_{name}"
         return self._sanitize_video_stem(name)
 
-    def _configure_video_recording(self) -> None:
+    def _configure_video_recording(self) -> bool:
+        output_dir = self._selected_output_dir()
+        if output_dir is None:
+            return False
         self._cfg.record_video = True
-        self._cfg.video_dir = str(_REPO_ROOT / "test_video")
+        self._cfg.video_dir = str(output_dir)
         self._cfg.video_name = self._checkpoint_video_stem()
         self._cfg.video_fps = max(1.0, float(self._cfg.max_hz))
+        self._log_info(f"Artifacts will be saved to {output_dir}")
+        return True
 
     def _default_checkpoint_for_mode(self, mode: str) -> str:
         preset = _POLICY_PRESETS.get(mode, _POLICY_PRESETS["basic"])
@@ -883,6 +900,62 @@ class EvalGUI(QtWidgets.QMainWindow):
             return
         self.cb_checkpoint.setEditText(path)
         self._remember_checkpoint(path=path)
+
+    def _resolve_output_dir(self, text: str) -> pathlib.Path:
+        path = pathlib.Path(text).expanduser()
+        if not path.is_absolute():
+            path = pathlib.Path.cwd() / path
+        return path
+
+    def _output_browse_start_dir(self) -> pathlib.Path:
+        text = self.le_output_dir.text().strip()
+        if text:
+            candidate = self._resolve_output_dir(text)
+            if candidate.exists():
+                return candidate if candidate.is_dir() else candidate.parent
+            parent = candidate.parent
+            if parent.exists():
+                return parent
+        return pathlib.Path.cwd()
+
+    def _on_browse_output_dir(self) -> None:
+        path = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Select output directory", str(self._output_browse_start_dir()))
+        if not path:
+            return
+        self.le_output_dir.setText(path)
+
+    def _selected_output_dir(self) -> Optional[pathlib.Path]:
+        text = self.le_output_dir.text().strip()
+        if not text:
+            self._on_browse_output_dir()
+            text = self.le_output_dir.text().strip()
+            if not text:
+                self._log_error("Start canceled: choose an output directory.")
+                return None
+
+        path = self._resolve_output_dir(text)
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            path = path.resolve()
+        except Exception as e:                       # noqa: BLE001
+            self._log_error(f"Could not create output directory {path}: {e}")
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Output Directory Error",
+                f"Could not create output directory:\n{path}\n\n{e}",
+            )
+            return None
+        if not path.is_dir():
+            self._log_error(f"Output path is not a directory: {path}")
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Output Directory Error",
+                f"Output path is not a directory:\n{path}",
+            )
+            return None
+        self.le_output_dir.setText(str(path))
+        return path
 
     def _policy_python_cmd(self) -> list[str]:
         if sys.version_info >= (3, 11):
@@ -1234,10 +1307,11 @@ class EvalGUI(QtWidgets.QMainWindow):
             self._runner = None
 
     def _on_start(self) -> None:
+        if not self._configure_video_recording():
+            return
         if self._runner is None:
             self._on_connect()
         if self._runner is not None:
-            self._configure_video_recording()
             self._runner.start()
             self._log_info("Run loop started.")
 
@@ -1363,7 +1437,7 @@ def main() -> None:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--action_horizon", type=int, default=25)
-    p.add_argument("--max_steps", type=int, default=1000)
+    p.add_argument("--max_steps", type=int, default=2000)
     p.add_argument("--dry_run", action="store_true")
     p.add_argument("--dump_dir", default="debug_inputs")
     p.add_argument("--log", default="INFO")

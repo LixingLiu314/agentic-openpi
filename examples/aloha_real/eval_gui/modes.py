@@ -654,6 +654,7 @@ class SubgoalMode(ModeHandler):
         self._update_every = max(1, int(update_every))
         self._cameras = list(cameras or ["cam_high"])
         self._blocking = bool(blocking)
+        self._async_start_step = 15
         self._step = 0
         self._initialized = False   # True once first subgoal image received
         self._lock = threading.Lock()
@@ -661,6 +662,11 @@ class SubgoalMode(ModeHandler):
         self._inflight: Optional[threading.Thread] = None
         self._last_blocking_control_step: Optional[int] = None
         self._use_cached_once = False
+        self._latest_control_step = -1
+        self._latest_task = ""
+        self._latest_images: Dict[str, np.ndarray] = {}
+        self._last_request_control_step = -1
+        self._request_generation = 0
 
     def reset(self) -> None:
         with self._lock:
@@ -670,6 +676,11 @@ class SubgoalMode(ModeHandler):
             self._inflight = None
             self._last_blocking_control_step = None
             self._use_cached_once = False
+            self._latest_control_step = -1
+            self._latest_task = ""
+            self._latest_images = {}
+            self._last_request_control_step = -1
+            self._request_generation += 1
 
     def set_blocking(self, blocking: bool) -> None:
         self._blocking = bool(blocking)
@@ -684,8 +695,52 @@ class SubgoalMode(ModeHandler):
         loop_step: int,
         cancel_check: Optional[Callable[[], bool]] = None,
     ) -> bool:
-        if not self._blocking:
+        raw_images = raw_obs.get("images") or {}
+        latest_images = {
+            cam: raw_images[cam].copy()
+            for cam in self._cameras
+            if cam in raw_images
+        }
+        if not latest_images:
             return False
+
+        with runtime._lock:
+            task = runtime.task
+
+        if not self._blocking:
+            with self._lock:
+                self._latest_control_step = loop_step
+                self._latest_task = task
+                self._latest_images = latest_images
+                if self._inflight is not None and not self._inflight.is_alive():
+                    logger.warning("Recovering stale ForeAct async request state")
+                    self._inflight = None
+                inflight = self._inflight is not None
+                should_request = (
+                    loop_step >= self._async_start_step
+                    and not inflight
+                    and loop_step > self._last_request_control_step
+                )
+                request_images = {cam: img.copy() for cam, img in self._latest_images.items()}
+            if should_request:
+                if self._last_request_control_step < 0:
+                    logger.info(
+                        "Non-blocking subgoal mode starting delayed ForeAct request at step %d",
+                        loop_step,
+                    )
+                else:
+                    logger.debug(
+                        "Non-blocking subgoal mode scheduling ForeAct request at step %d",
+                        loop_step,
+                    )
+                self._spawn_request(
+                    {"images": request_images},
+                    task,
+                    runtime,
+                    request_step=loop_step,
+                )
+            return False
+
         if loop_step != 0 and loop_step % self._update_every != 0:
             return False
 
@@ -695,12 +750,6 @@ class SubgoalMode(ModeHandler):
 
         if cancel_check is not None and cancel_check():
             return False
-        cam_high = raw_obs["images"].get("cam_high")
-        if cam_high is None:
-            return False
-
-        with runtime._lock:
-            task = runtime.task
 
         logger.info("Blocking subgoal mode waiting for fresh ForeAct subgoal at step %d", loop_step)
         self._do_request(raw_obs, task, runtime)
@@ -746,26 +795,87 @@ class SubgoalMode(ModeHandler):
             with self._lock:
                 self._initialized = True
 
-    def _spawn_request(self, raw_obs: Dict[str, Any], task: str, runtime: RuntimeState) -> None:
-        snapshots = {cam: raw_obs["images"][cam].copy() for cam in self._cameras
-                     if cam in raw_obs["images"]}
+    def _spawn_request(
+        self,
+        raw_obs: Dict[str, Any],
+        task: str,
+        runtime: RuntimeState,
+        *,
+        request_step: int,
+    ) -> bool:
+        snapshots = {
+            cam: raw_obs["images"][cam].copy()
+            for cam in self._cameras
+            if cam in raw_obs["images"]
+        }
+        if not snapshots:
+            return False
 
+        generation = 0
         def _run() -> None:
-            updated = False
-            for cam, img in snapshots.items():
-                sg = self._predict_subgoal(cam, img, task)
-                if sg is None:
-                    continue
-                self._store_subgoal(cam, sg, runtime)
-                updated = True
-            if not updated:
+            try:
+                try:
+                    updated = False
+                    for cam, img in snapshots.items():
+                        with self._lock:
+                            if generation != self._request_generation:
+                                return
+                        sg = self._predict_subgoal(cam, img, task)
+                        if sg is None:
+                            continue
+                        with self._lock:
+                            if generation != self._request_generation:
+                                return
+                        self._store_subgoal(cam, sg, runtime)
+                        updated = True
+                    if not updated:
+                        with self._lock:
+                            self._initialized = True
+                except Exception:  # noqa: BLE001
+                    logger.exception("ForeAct async request worker crashed")
+            finally:
+                next_request = None
                 with self._lock:
-                    self._initialized = True
+                    if self._inflight is threading.current_thread():
+                        self._inflight = None
+                    if (
+                        not self._blocking
+                        and self._latest_control_step >= self._async_start_step
+                        and self._latest_images
+                        and generation == self._request_generation
+                        and self._latest_control_step > self._last_request_control_step
+                    ):
+                        next_request = (
+                            {"images": {cam: img.copy() for cam, img in self._latest_images.items()}},
+                            self._latest_task,
+                            self._latest_control_step,
+                        )
+                if next_request is not None:
+                    next_obs, next_task, next_step = next_request
+                    self._spawn_request(next_obs, next_task, runtime, request_step=next_step)
 
         t = threading.Thread(target=_run, daemon=True, name="foreact-predict")
-        t.start()
         with self._lock:
+            if self._inflight is not None and not self._inflight.is_alive():
+                logger.warning("Recovering stale ForeAct async request state")
+                self._inflight = None
+            if self._inflight is not None:
+                return False
+            if request_step <= self._last_request_control_step:
+                return False
+            generation = self._request_generation
+            self._last_request_control_step = int(request_step)
             self._inflight = t
+        try:
+            t.start()
+        except Exception:
+            with self._lock:
+                if self._inflight is t:
+                    self._inflight = None
+                if self._last_request_control_step == int(request_step):
+                    self._last_request_control_step = int(request_step) - 1
+            raise
+        return True
 
     # ------------------------------------------------------------------ #
     def build_obs(self, raw_obs, runtime):
@@ -776,35 +886,26 @@ class SubgoalMode(ModeHandler):
 
         with self._lock:
             first_step = not self._initialized
-            should_request = first_step or (self._step % self._update_every == 0)
             self._step += 1
-            blocking = first_step or self._blocking   # force-block on step 0
-            in_flight = self._inflight is not None and self._inflight.is_alive()
             cache_snapshot = dict(self._cache)
             use_cached_once = self._use_cached_once
             self._use_cached_once = False
 
-        if should_request:
-            if self._blocking:
-                if not use_cached_once and not cache_snapshot:
-                    # Fallback for direct callers that bypass before_control_step().
-                    self._do_request(raw_obs, runtime.task, runtime)
-                    with self._lock:
-                        cache_snapshot = dict(self._cache)
-                elif use_cached_once:
-                    # The fresh subgoal was already fetched synchronously in
-                    # before_control_step(); just consume the cached result.
-                    pass
-            elif blocking:
-                # Synchronous fetch: callers pause here until the new
-                # subgoal arrives (or the request fails / times out).
-                # On first step this guarantees the robot never moves
-                # without a valid subgoal image.
+        if self._blocking:
+            if not use_cached_once and not cache_snapshot:
+                # Fallback for direct callers that bypass before_control_step().
                 self._do_request(raw_obs, runtime.task, runtime)
                 with self._lock:
                     cache_snapshot = dict(self._cache)
-            elif not in_flight:
-                self._spawn_request(raw_obs, runtime.task, runtime)
+            elif use_cached_once:
+                # The fresh subgoal was already fetched synchronously in
+                # before_control_step(); just consume the cached result.
+                pass
+        elif first_step and not cache_snapshot:
+            # Keep the initial blocking request behavior for step 0.
+            self._do_request(raw_obs, runtime.task, runtime)
+            with self._lock:
+                cache_snapshot = dict(self._cache)
 
         if cache_snapshot:
             obs["subgoal_images"] = {

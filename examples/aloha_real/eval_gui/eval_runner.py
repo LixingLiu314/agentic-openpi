@@ -58,7 +58,7 @@ class RunnerConfig:
     reset_move_time: float = 2.0
     dump_dir: str = "debug_inputs"   # under cwd; created on first dump
     record_video: bool = False
-    video_dir: str = "test_video"
+    video_dir: str = ""
     video_name: str = "eval"
     video_fps: float = _DEFAULT_HZ
     log_model_inputs: bool = True
@@ -75,9 +75,15 @@ def _safe_filename_part(text: str) -> str:
 class _VideoRecorder:
     """Asynchronous RGB frame writer for VS Code-compatible H.264 MP4."""
 
-    def __init__(self, path: pathlib.Path, fps: float) -> None:
+    def __init__(
+        self,
+        path: pathlib.Path,
+        fps: float,
+        frame_size: Optional[tuple[int, int]] = None,
+    ) -> None:
         self.path = path
         self._fps = float(fps)
+        self._frame_size = tuple(frame_size) if frame_size is not None else None
         self._queue: queue.Queue[Optional[np.ndarray]] = queue.Queue(maxsize=256)
         self._thread = threading.Thread(target=self._run, daemon=True, name="eval-video-writer")
         self._proc: Optional[subprocess.Popen] = None
@@ -125,7 +131,10 @@ class _VideoRecorder:
         return self._error
 
     def _start_ffmpeg(self, frame_shape: tuple[int, int, int]) -> None:
-        h, w = frame_shape[:2]
+        if self._frame_size is not None:
+            h, w = self._frame_size
+        else:
+            h, w = frame_shape[:2]
         fps = max(1.0, self._fps)
         cmd = [
             "ffmpeg",
@@ -144,8 +153,6 @@ class _VideoRecorder:
             "-i",
             "pipe:0",
             "-an",
-            "-vf",
-            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
             "-c:v",
             "libx264",
             "-preset",
@@ -153,7 +160,7 @@ class _VideoRecorder:
             "-crf",
             "23",
             "-pix_fmt",
-            "yuv420p",
+            "yuv444p",
             "-movflags",
             "+faststart",
             str(self.path),
@@ -311,15 +318,31 @@ class _ContinuousVideoRecorder:
 
 
 class _StepInputLogger:
-    """Append-only JSONL logger for the exact payload sent to each VLA infer."""
+    """Append-only JSONL logger for each control step.
 
-    def __init__(self, path: pathlib.Path, artifact_prefix: str) -> None:
+    The logger keeps a single per-run MP4 for subgoal images instead of
+    writing one JPG per inference. The JSONL trace is written once per
+    control step so it matches the runtime step count rather than the
+    chunked policy-inference cadence.
+    """
+
+    def __init__(self, path: pathlib.Path, artifact_prefix: str, video_fps: float) -> None:
         self.path = path
         self._artifact_prefix = artifact_prefix
+        self._video_fps = max(1.0, float(video_fps))
         self._fh = None
         self._lock = threading.Lock()
         self._closed = False
         self._error = ""
+        self._subgoal_video_path = self.path.parent / f"{artifact_prefix}_subgoal.mp4"
+        self._subgoal_recorder: Optional[_VideoRecorder] = None
+        self._subgoal_frames = 0
+        self._subgoal_error = ""
+        self._subgoal_camera_order: list[str] = []
+        self._subgoal_tile_sizes: Dict[str, tuple[int, int]] = {}
+        self._subgoal_tile_offsets: Dict[str, tuple[int, int]] = {}
+        self._subgoal_canvas_shape: Optional[tuple[int, int]] = None
+        self._subgoal_frame_index: Optional[int] = None
 
     def start(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -333,12 +356,73 @@ class _StepInputLogger:
             if self._fh is not None:
                 self._fh.close()
                 self._fh = None
+            recorder = self._subgoal_recorder
+            self._subgoal_recorder = None
+        if recorder is not None:
+            try:
+                dropped = recorder.stop()
+            except Exception as e:                       # noqa: BLE001
+                self._subgoal_error = f"failed to stop subgoal video recorder: {e}"
+            else:
+                if recorder.error:
+                    self._subgoal_error = recorder.error
+                if dropped and not self._subgoal_error:
+                    self._subgoal_error = f"{dropped} subgoal frames dropped"
 
     @property
     def error(self) -> str:
         return self._error
 
-    def log(
+    @property
+    def subgoal_video_path(self) -> pathlib.Path:
+        return self._subgoal_video_path
+
+    @property
+    def subgoal_frame_count(self) -> int:
+        return self._subgoal_frames
+
+    @property
+    def subgoal_error(self) -> str:
+        return self._subgoal_error
+
+    @property
+    def subgoal_frame_index(self) -> Optional[int]:
+        return self._subgoal_frame_index
+
+    def record_subgoal_images(self, payload: Dict[str, Any]) -> Optional[int]:
+        subgoal_images = payload.get("subgoal_images") or {}
+        if not subgoal_images:
+            return None
+
+        frame = self._compose_subgoal_frame(subgoal_images)
+        if frame is None:
+            return None
+
+        with self._lock:
+            frame_index = self._subgoal_frames
+            recorder = self._subgoal_recorder
+            if recorder is None:
+                try:
+                    recorder = _VideoRecorder(
+                        path=self._subgoal_video_path,
+                        fps=self._video_fps,
+                        frame_size=frame.shape[:2],
+                    )
+                    recorder.start()
+                except Exception as e:                   # noqa: BLE001
+                    self._subgoal_error = f"failed to start subgoal video recorder: {e}"
+                    return None
+                self._subgoal_recorder = recorder
+            self._subgoal_frames += 1
+            self._subgoal_frame_index = frame_index
+
+        try:
+            recorder.write(frame)
+        except Exception as e:                           # noqa: BLE001
+            self._subgoal_error = f"failed to write subgoal video frame: {e}"
+        return frame_index
+
+    def log_step(
         self,
         payload: Dict[str, Any],
         raw_obs: Dict[str, Any],
@@ -348,31 +432,12 @@ class _StepInputLogger:
         mode: str,
         runtime_snapshot: Dict[str, Any],
         cfg: RunnerConfig,
+        frame_index: Optional[int],
     ) -> None:
-        subgoal_paths: Dict[str, str] = {}
-        subgoal_shapes: Dict[str, list[int]] = {}
-        subgoal_images = payload.get("subgoal_images") or {}
-        for cam, image in subgoal_images.items():
-            arr = np.asarray(image)
-            subgoal_shapes[str(cam)] = list(arr.shape)
-            try:
-                image_path = self._subgoal_image_path(step, inference_index, str(cam), len(subgoal_images))
-                self._write_rgb_image(image_path, arr)
-                subgoal_paths[str(cam)] = str(image_path)
-            except Exception as e:                       # noqa: BLE001
-                self._error = f"failed to save subgoal image: {e}"
-
         state = np.asarray(payload.get("state", []), dtype=np.float32).reshape(-1)
         images = payload.get("images") or {}
         raw_images = (raw_obs.get("images") or {}) if isinstance(raw_obs, dict) else {}
-        runtime_meta = {
-            "task": runtime_snapshot.get("task", ""),
-            "subtask_key": runtime_snapshot.get("subtask_key"),
-            "subtask_label": runtime_snapshot.get("subtask_label", ""),
-            "traj_text": runtime_snapshot.get("traj_text", ""),
-            "manual_traj_override": bool(runtime_snapshot.get("manual_traj_override", False)),
-            "waiting_for_subtask_input": bool(runtime_snapshot.get("waiting_for_subtask_input", False)),
-        }
+        subgoal_images = payload.get("subgoal_images") or {}
         entry = {
             "type": "vla_input",
             "inference_index": int(inference_index),
@@ -386,14 +451,26 @@ class _StepInputLogger:
             "image_keys": list(images.keys()),
             "image_shapes": {str(k): list(np.asarray(v).shape) for k, v in images.items()},
             "subgoal_image_keys": list(subgoal_images.keys()),
-            "subgoal_image_shapes": subgoal_shapes,
-            "subgoal_image_paths": subgoal_paths,
+            "subgoal_image_shapes": {str(k): list(np.asarray(v).shape) for k, v in subgoal_images.items()},
+            "frame_index": None if frame_index is None else int(frame_index),
+            "subgoal_frame_index": None if frame_index is None else int(frame_index),
+            "subgoal_image_paths": {},
+            "subgoal_video_path": str(self._subgoal_video_path) if subgoal_images else "",
+            "subgoal_video_frames": int(self._subgoal_frames),
             "raw_image_shapes": {str(k): list(np.asarray(v).shape) for k, v in raw_images.items()},
-            "runtime": runtime_meta,
+            "runtime": {
+                "task": runtime_snapshot.get("task", ""),
+                "subtask_key": runtime_snapshot.get("subtask_key"),
+                "subtask_label": runtime_snapshot.get("subtask_label", ""),
+                "traj_text": runtime_snapshot.get("traj_text", ""),
+                "manual_traj_override": bool(runtime_snapshot.get("manual_traj_override", False)),
+                "waiting_for_subtask_input": bool(runtime_snapshot.get("waiting_for_subtask_input", False)),
+            },
             "config": {
                 "action_horizon": int(cfg.action_horizon),
                 "max_hz": float(cfg.max_hz),
                 "video_fps": float(cfg.video_fps),
+                "json_step_frequency": 1,
             },
         }
         line = json.dumps(entry, ensure_ascii=False, sort_keys=True)
@@ -403,29 +480,56 @@ class _StepInputLogger:
             self._fh.write(line + "\n")
             self._fh.flush()
 
-    def _subgoal_image_path(
-        self,
-        step: int,
-        inference_index: int,
-        cam: str,
-        num_subgoals: int,
-    ) -> pathlib.Path:
-        safe_cam = _safe_filename_part(cam)
-        if num_subgoals == 1 and safe_cam == "cam_high":
-            name = f"{self._artifact_prefix}_step_{step:05d}_subgoal.jpg"
-        else:
-            name = f"{self._artifact_prefix}_step_{step:05d}_subgoal_{safe_cam}.jpg"
-        candidate = self.path.parent / name
-        if not candidate.exists():
-            return candidate
-        stem = candidate.stem
-        suffix = candidate.suffix
-        return candidate.with_name(f"{stem}_infer_{inference_index:04d}{suffix}")
+    def _compose_subgoal_frame(self, subgoal_images: Dict[str, Any]) -> Optional[np.ndarray]:
+        frames: Dict[str, np.ndarray] = {}
+        for cam, image in subgoal_images.items():
+            arr = self._to_hwc_rgb(image)
+            if arr.ndim != 3 or arr.shape[2] != 3:
+                continue
+            frames[str(cam)] = arr
+        if not frames:
+            return None
+
+        if not self._subgoal_camera_order:
+            self._initialize_subgoal_layout(frames)
+
+        assert self._subgoal_canvas_shape is not None
+        ordered_frames: list[np.ndarray] = []
+        for cam in self._subgoal_camera_order:
+            tile_h, tile_w = self._subgoal_tile_sizes[cam]
+            frame = frames.get(cam)
+            if frame is None:
+                tile = np.zeros((tile_h, tile_w, 3), dtype=np.uint8)
+            else:
+                tile = self._fit_frame_to_tile(frame, (tile_h, tile_w))
+            ordered_frames.append(tile)
+
+        canvas_h, canvas_w = self._subgoal_canvas_shape
+        canvas = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
+        for cam, tile in zip(self._subgoal_camera_order, ordered_frames):
+            x0, y0 = self._subgoal_tile_offsets[cam]
+            tile_h, tile_w = self._subgoal_tile_sizes[cam]
+            canvas[y0 : y0 + tile_h, x0 : x0 + tile_w] = tile
+        return canvas
+
+    def _initialize_subgoal_layout(self, frames: Dict[str, np.ndarray]) -> None:
+        self._subgoal_camera_order = sorted(frames.keys())
+        self._subgoal_tile_sizes = {
+            cam: frames[cam].shape[:2] for cam in self._subgoal_camera_order
+        }
+        canvas_h = max(h for h, _ in self._subgoal_tile_sizes.values())
+        canvas_w = sum(w for _, w in self._subgoal_tile_sizes.values())
+        self._subgoal_canvas_shape = (canvas_h, canvas_w)
+        self._subgoal_tile_offsets = {}
+        x0 = 0
+        for cam in self._subgoal_camera_order:
+            tile_h, tile_w = self._subgoal_tile_sizes[cam]
+            y0 = (canvas_h - tile_h) // 2
+            self._subgoal_tile_offsets[cam] = (x0, y0)
+            x0 += tile_w
 
     @staticmethod
-    def _write_rgb_image(path: pathlib.Path, image: np.ndarray) -> None:
-        import cv2
-
+    def _to_hwc_rgb(image: Any) -> np.ndarray:
         arr = np.asarray(image)
         if arr.ndim == 3 and arr.shape[0] in (1, 3) and arr.shape[-1] not in (1, 3):
             arr = np.transpose(arr, (1, 2, 0))
@@ -433,10 +537,26 @@ class _StepInputLogger:
             arr = np.clip(arr, 0, 255).astype(np.uint8)
         if arr.ndim == 3 and arr.shape[2] == 1:
             arr = arr[:, :, 0]
-        out = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR) if arr.ndim == 3 and arr.shape[2] == 3 else arr
-        ok = cv2.imwrite(str(path), out)
-        if not ok:
-            raise RuntimeError(f"cv2.imwrite returned false for {path}")
+        return arr
+
+    @staticmethod
+    def _fit_frame_to_tile(frame: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
+        target_h, target_w = target_shape
+        src_h, src_w = frame.shape[:2]
+        if (src_h, src_w) == (target_h, target_w):
+            return frame
+        out = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+        copy_h = min(src_h, target_h)
+        copy_w = min(src_w, target_w)
+        src_y0 = max(0, (src_h - target_h) // 2)
+        src_x0 = max(0, (src_w - target_w) // 2)
+        dst_y0 = max(0, (target_h - src_h) // 2)
+        dst_x0 = max(0, (target_w - src_w) // 2)
+        out[dst_y0 : dst_y0 + copy_h, dst_x0 : dst_x0 + copy_w] = frame[
+            src_y0 : src_y0 + copy_h,
+            src_x0 : src_x0 + copy_w,
+        ]
+        return out
 
 
 class _BrokerAdapter:
@@ -469,7 +589,7 @@ class _BrokerAdapter:
                 logger.warning("Input dump failed: %s", e)
             self._runner._pending_dump = False
         try:
-            self._runner._log_model_input(payload, raw_obs)
+            self._runner._cache_latest_model_input(payload, raw_obs)
         except Exception as e:                           # noqa: BLE001
             logger.warning("Input log failed: %s", e)
         return self._ws_policy.infer(payload)
@@ -530,6 +650,10 @@ class EvalRunner:
         self._artifact_lock = threading.Lock()
         self._video_recorder: Optional[_ContinuousVideoRecorder] = None
         self._input_logger: Optional[_StepInputLogger] = None
+        self._latest_model_payload: Optional[Dict[str, Any]] = None
+        self._latest_model_raw_obs: Optional[Dict[str, Any]] = None
+        self._latest_model_inference_index = -1
+        self._latest_model_frame_index: Optional[int] = None
 
     # ------------------------------------------------------------------ #
     def connect(self) -> dict:
@@ -609,6 +733,11 @@ class EvalRunner:
             self._broker.reset()
         self._manual_control_evt.clear()
         self._runtime.clear()
+        with self._artifact_lock:
+            self._latest_model_payload = None
+            self._latest_model_raw_obs = None
+            self._latest_model_inference_index = -1
+            self._latest_model_frame_index = None
 
     # ------------------------------------------------------------------ #
     # Return-to-Zero — mirrors `scripts/eval_banana.sh --reset-only` which in
@@ -751,23 +880,41 @@ class EvalRunner:
         (sub / "meta.json").write_text(json.dumps(meta, indent=2))
         self._on_event("info", {"msg": f"Dumped model inputs -> {sub}"})
 
-    def _log_model_input(self, payload: Dict[str, Any], raw_obs: Dict[str, Any]) -> None:
+    def _cache_latest_model_input(self, payload: Dict[str, Any], raw_obs: Dict[str, Any]) -> None:
         with self._artifact_lock:
-            input_logger = self._input_logger
             inference_index = self._input_log_counter
             self._input_log_counter += 1
-        if input_logger is None:
+            self._latest_model_payload = payload
+            self._latest_model_raw_obs = raw_obs
+            self._latest_model_inference_index = inference_index
+            self._latest_model_frame_index = None
+            input_logger = self._input_logger
+        frame_index = None
+        if input_logger is not None:
+            frame_index = input_logger.record_subgoal_images(payload)
+        with self._artifact_lock:
+            self._latest_model_frame_index = frame_index
+
+    def _log_step_model_input(self, step: int) -> None:
+        with self._artifact_lock:
+            input_logger = self._input_logger
+            payload = self._latest_model_payload
+            raw_obs = self._latest_model_raw_obs
+            inference_index = self._latest_model_inference_index
+            frame_index = self._latest_model_frame_index
+        if input_logger is None or payload is None or raw_obs is None:
             return
         with self._handler_lock:
             mode = self._handler.name
-        input_logger.log(
+        input_logger.log_step(
             payload,
             raw_obs,
-            step=self._step_count,
+            step=step,
             inference_index=inference_index,
             mode=mode,
             runtime_snapshot=self._runtime.snapshot(),
             cfg=self._cfg,
+            frame_index=frame_index,
         )
 
     # ------------------------------------------------------------------ #
@@ -835,7 +982,11 @@ class EvalRunner:
             return None
         path = pathlib.Path(self._cfg.video_dir) / f"{artifact_prefix}_log.jsonl"
         try:
-            input_logger = _StepInputLogger(path=path, artifact_prefix=artifact_prefix)
+            input_logger = _StepInputLogger(
+                path=path,
+                artifact_prefix=artifact_prefix,
+                video_fps=max(1.0, float(self._cfg.video_fps)),
+            )
             input_logger.start()
         except Exception as e:                       # noqa: BLE001
             logger.warning("Model-input logging disabled: %s", e)
@@ -857,6 +1008,11 @@ class EvalRunner:
             if input_logger.error:
                 msg += f" ({input_logger.error})"
             self._on_event("info", {"msg": msg})
+            if input_logger.subgoal_frame_count > 0:
+                subgoal_msg = f"Saved subgoal video -> {input_logger.subgoal_video_path}"
+                if input_logger.subgoal_error:
+                    subgoal_msg += f" ({input_logger.subgoal_error})"
+                self._on_event("info", {"msg": subgoal_msg})
 
         if recorder is not None:
             dropped = recorder.stop()
@@ -953,6 +1109,7 @@ class EvalRunner:
                         self._env.step(action_arr)
                     self._step_count += 1
                     self._on_event("step", {"step": self._step_count})
+                    self._log_step_model_input(self._step_count)
                 except Exception as e:                       # noqa: BLE001
                     logger.exception("Inference / step failed")
                     self._on_event("error", {"msg": f"Step failed: {e}"})
