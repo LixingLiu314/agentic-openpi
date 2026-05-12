@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 
 
 _DEFAULT_HZ = 30.0
+_CONTINUOUS_VIDEO_CAMERAS: Dict[str, str] = {
+    "base": "cam_high",
+    "left_wrist": "cam_left_wrist",
+    "right_wrist": "cam_right_wrist",
+}
 
 
 @dataclass
@@ -135,6 +140,7 @@ class _VideoRecorder:
             h, w = self._frame_size
         else:
             h, w = frame_shape[:2]
+            self._frame_size = (h, w)
         fps = max(1.0, self._fps)
         cmd = [
             "ffmpeg",
@@ -171,6 +177,25 @@ class _VideoRecorder:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
+
+    @staticmethod
+    def _fit_frame_to_size(frame: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
+        target_h, target_w = target_shape
+        src_h, src_w = frame.shape[:2]
+        if (src_h, src_w) == (target_h, target_w):
+            return frame
+        out = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+        copy_h = min(src_h, target_h)
+        copy_w = min(src_w, target_w)
+        src_y0 = max(0, (src_h - target_h) // 2)
+        src_x0 = max(0, (src_w - target_w) // 2)
+        dst_y0 = max(0, (target_h - src_h) // 2)
+        dst_x0 = max(0, (target_w - src_w) // 2)
+        out[dst_y0 : dst_y0 + copy_h, dst_x0 : dst_x0 + copy_w] = frame[
+            src_y0 : src_y0 + copy_h,
+            src_x0 : src_x0 + copy_w,
+        ]
+        return out
 
     def _finish_process(self) -> None:
         proc = self._proc
@@ -216,6 +241,8 @@ class _VideoRecorder:
                 frame = self._queue.get()
                 if frame is None:
                     break
+                if self._frame_size is not None:
+                    frame = self._fit_frame_to_size(frame, self._frame_size)
                 if self._proc is None:
                     self._start_ffmpeg(frame.shape)
                 if self._proc.stdin is None:
@@ -235,79 +262,115 @@ class _VideoRecorder:
             self._finish_process()
 
 
-class _ContinuousVideoRecorder:
-    """Samples the latest camera frame at a fixed rate and streams it to MP4."""
+class _MultiCameraVideoRecorder:
+    """Samples one observation stream and writes selected cameras to MP4s."""
 
     def __init__(
         self,
-        path: pathlib.Path,
+        paths: Dict[str, pathlib.Path],
         fps: float,
         obs_provider: Callable[[], Optional[dict]],
         obs_callback: Callable[[dict], None],
         *,
-        camera_key: str = "cam_high",
+        camera_keys: Dict[str, str],
     ) -> None:
-        self.path = path
+        self.paths = dict(paths)
         self._fps = max(1.0, float(fps))
         self._obs_provider = obs_provider
         self._obs_callback = obs_callback
-        self._camera_key = camera_key
-        self._writer = _VideoRecorder(path=path, fps=self._fps)
+        self._camera_keys = dict(camera_keys)
+        self._writers = {
+            name: _VideoRecorder(path=self.paths[name], fps=self._fps)
+            for name in self._camera_keys
+        }
         self._stop_evt = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name="eval-video-sampler")
         self._lock = threading.Lock()
         self._started = False
         self._stopped = False
-        self._dropped = 0
+        self._dropped: Dict[str, int] = {name: 0 for name in self._camera_keys}
         self._sampler_error = ""
 
     def start(self) -> None:
         with self._lock:
             if self._started:
                 return
-            self._writer.start()
+            started: list[_VideoRecorder] = []
+            try:
+                for writer in self._writers.values():
+                    writer.start()
+                    started.append(writer)
+            except Exception:
+                for writer in started:
+                    try:
+                        writer.stop()
+                    except Exception:                  # noqa: BLE001
+                        pass
+                raise
             self._started = True
             self._thread.start()
 
-    def stop(self) -> int:
+    def stop(self) -> Dict[str, int]:
         with self._lock:
             if self._stopped:
-                return self._dropped
+                return dict(self._dropped)
             self._stopped = True
             started = self._started
         if not started:
-            return self._dropped
+            return dict(self._dropped)
         self._stop_evt.set()
         self._thread.join(timeout=5.0)
         if self._thread.is_alive():
             self._sampler_error = "video sampler did not finish within 5 seconds"
-        self._dropped = self._writer.stop()
-        return self._dropped
+        self._dropped = {
+            name: writer.stop()
+            for name, writer in self._writers.items()
+        }
+        return dict(self._dropped)
 
     @property
     def error(self) -> str:
-        parts = [self._sampler_error, self._writer.error]
+        parts = [self._sampler_error]
+        parts.extend(
+            f"{name}: {writer.error}"
+            for name, writer in self._writers.items()
+            if writer.error
+        )
         return "; ".join(part for part in parts if part)
+
+    @property
+    def writer_errors(self) -> Dict[str, str]:
+        return {
+            name: writer.error
+            for name, writer in self._writers.items()
+            if writer.error
+        }
+
+    @property
+    def sampler_error(self) -> str:
+        return self._sampler_error
 
     def _run(self) -> None:
         period = 1.0 / self._fps
         next_tick = time.monotonic()
-        last_frame: Optional[np.ndarray] = None
+        last_frames: Dict[str, np.ndarray] = {}
 
         while not self._stop_evt.is_set():
             try:
                 obs = self._obs_provider()
                 if obs is not None:
                     self._obs_callback(obs)
-                    frame = (obs.get("images") or {}).get(self._camera_key)
-                    if frame is not None:
-                        last_frame = frame
+                    images = obs.get("images") or {}
+                    for name, camera_key in self._camera_keys.items():
+                        frame = images.get(camera_key)
+                        if frame is not None:
+                            last_frames[name] = frame
             except Exception as e:                       # noqa: BLE001
                 if not self._sampler_error:
                     self._sampler_error = f"video sampler failed to read observation: {e}"
 
-            if last_frame is not None:
-                self._writer.write(last_frame)
+            for name, frame in last_frames.items():
+                self._writers[name].write(frame)
 
             next_tick += period
             delay = next_tick - time.monotonic()
@@ -648,7 +711,7 @@ class EvalRunner:
         self._dump_counter = 0
         self._input_log_counter = 0
         self._artifact_lock = threading.Lock()
-        self._video_recorder: Optional[_ContinuousVideoRecorder] = None
+        self._video_recorder: Optional[_MultiCameraVideoRecorder] = None
         self._input_logger: Optional[_StepInputLogger] = None
         self._latest_model_payload: Optional[Dict[str, Any]] = None
         self._latest_model_raw_obs: Optional[Dict[str, Any]] = None
@@ -958,23 +1021,29 @@ class EvalRunner:
         stem = _safe_filename_part(self._cfg.video_name or "eval")
         return f"{stem}_{ts}"
 
-    def _start_video_recorder(self, artifact_prefix: str) -> Optional[_ContinuousVideoRecorder]:
+    def _start_video_recorder(self, artifact_prefix: str) -> Optional[_MultiCameraVideoRecorder]:
         if not self._cfg.record_video:
             return None
-        path = pathlib.Path(self._cfg.video_dir) / f"{artifact_prefix}.mp4"
+        output_dir = pathlib.Path(self._cfg.video_dir)
+        paths = {
+            name: output_dir / f"{artifact_prefix}_video_{name}.mp4"
+            for name in _CONTINUOUS_VIDEO_CAMERAS
+        }
         try:
-            recorder = _ContinuousVideoRecorder(
-                path=path,
+            recorder = _MultiCameraVideoRecorder(
+                paths=paths,
                 fps=max(1.0, float(self._cfg.video_fps)),
                 obs_provider=self._recording_observation,
                 obs_callback=self._store_latest_obs,
+                camera_keys=_CONTINUOUS_VIDEO_CAMERAS,
             )
             recorder.start()
         except Exception as e:                       # noqa: BLE001
             logger.warning("Video recording disabled: %s", e)
             self._on_event("error", {"msg": f"Video recording disabled: {e}"})
             return None
-        self._on_event("info", {"msg": f"Recording continuous main camera video -> {path}"})
+        details = ", ".join(f"{name}: {path}" for name, path in paths.items())
+        self._on_event("info", {"msg": f"Recording continuous camera videos -> {details}"})
         return recorder
 
     def _start_input_logger(self, artifact_prefix: str) -> Optional[_StepInputLogger]:
@@ -1015,16 +1084,22 @@ class EvalRunner:
                 self._on_event("info", {"msg": subgoal_msg})
 
         if recorder is not None:
-            dropped = recorder.stop()
-            if recorder.path.exists() and recorder.path.stat().st_size > 0:
-                msg = f"Saved main camera video -> {recorder.path}"
-            else:
-                msg = f"Video recording ended without a saved file -> {recorder.path}"
-            if recorder.error:
-                msg += f" ({recorder.error})"
-            if dropped:
-                msg += f" ({dropped} frames dropped)"
-            self._on_event("info", {"msg": msg})
+            dropped_by_camera = recorder.stop()
+            writer_errors = recorder.writer_errors
+            for name, path in recorder.paths.items():
+                label = name.replace("_", " ")
+                if path.exists() and path.stat().st_size > 0:
+                    msg = f"Saved {label} camera video -> {path}"
+                else:
+                    msg = f"{label.capitalize()} camera video ended without a saved file -> {path}"
+                if name in writer_errors:
+                    msg += f" ({writer_errors[name]})"
+                dropped = dropped_by_camera.get(name, 0)
+                if dropped:
+                    msg += f" ({dropped} frames dropped)"
+                self._on_event("info", {"msg": msg})
+            if recorder.sampler_error:
+                self._on_event("info", {"msg": f"Video recording issue: {recorder.sampler_error}"})
 
     # ------------------------------------------------------------------ #
     def _run_loop(self) -> None:
