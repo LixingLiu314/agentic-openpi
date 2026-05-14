@@ -68,16 +68,26 @@ class ForeactClient:
         deadline = time.time() + self._connect_timeout
         last_err: Optional[Exception] = None
         while time.time() < deadline:
+            remaining = max(0.1, deadline - time.time())
             try:
                 self._ws = websockets.sync.client.connect(
-                    self._uri, compression=None, max_size=None
+                    self._uri,
+                    compression=None,
+                    max_size=None,
+                    open_timeout=remaining,
                 )
-                self._metadata = msgpack_numpy.unpackb(self._ws.recv())
+                self._metadata = msgpack_numpy.unpackb(self._ws.recv(timeout=remaining))
                 logger.info("ForeactClient connected: %s, metadata=%s", self._uri, self._metadata)
                 return self._metadata
-            except (ConnectionRefusedError, OSError) as e:
+            except Exception as e:  # noqa: BLE001
                 last_err = e
-                time.sleep(2.0)
+                try:
+                    if self._ws is not None:
+                        self._ws.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._ws = None
+                time.sleep(min(0.25, max(0.0, deadline - time.time())))
         raise RuntimeError(f"Could not connect to ForeAct server at {self._uri}: {last_err}")
 
     def close(self) -> None:

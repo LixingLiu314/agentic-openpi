@@ -699,6 +699,7 @@ class EvalRunner:
         self._stop_evt = threading.Event()
         self._reset_evt = threading.Event()
         self._manual_control_evt = threading.Event()
+        self._replan_evt = threading.Event()
 
         # Guarantees we never call env.reset() and env.step() concurrently.
         self._env_lock = threading.Lock()
@@ -795,6 +796,7 @@ class EvalRunner:
         if self._broker is not None:
             self._broker.reset()
         self._manual_control_evt.clear()
+        self._replan_evt.clear()
         self._runtime.clear()
         with self._artifact_lock:
             self._latest_model_payload = None
@@ -889,6 +891,10 @@ class EvalRunner:
         """Save the next inference's model inputs to ``cfg.dump_dir``."""
         self._pending_dump = True
         self._on_event("info", {"msg": "Dump-inputs armed; will save on next inference."})
+
+    def request_replan(self) -> None:
+        """Discard cached action chunks before the next policy inference."""
+        self._replan_evt.set()
 
     def _dump_payload(self, payload: Dict[str, Any], raw_obs: Dict[str, Any]) -> None:
         """Write the post-repack obs (everything that goes on the wire) to disk."""
@@ -1165,6 +1171,9 @@ class EvalRunner:
                         cancel_check=lambda: self._stop_evt.is_set() or not self._running.is_set(),
                     )
                     if reset_broker and self._broker is not None:
+                        self._broker.reset()
+                    if self._replan_evt.is_set() and self._broker is not None:
+                        self._replan_evt.clear()
                         self._broker.reset()
                     if self._stop_evt.is_set():
                         break

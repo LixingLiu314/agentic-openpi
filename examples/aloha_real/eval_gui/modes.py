@@ -14,6 +14,9 @@ That means the handler must do the work of those repack transforms itself:
   * subtask -- prompt = ``"<task>, subtask: <label>"`` (mirrors
                ``_transforms.AppendSubtaskToPrompt`` exactly). Labels are
                user-editable and the keys 1..4 select among them.
+  * triple_cot -- prompt = ``"Task: <task>, subtask: <label>, traj: <text>"``.
+                  This mode uses the semi-block trajectory pipeline while the
+                  subtask key remains a live runtime value.
   * subgoal -- adds ``subgoal_images = {"cam_high": <CHW uint8 array>}``,
                which is what ``LeRobotAlohaWithSubgoalDataConfig`` passes
                into ``AlohaWithSubgoalInputs``.
@@ -27,6 +30,7 @@ For modes 2/3/4, two execution sub-modes are supported:
 """
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import re
@@ -72,7 +76,7 @@ def to_chw_uint8(img_hwc_rgb: np.ndarray, h: int = 224, w: int = 224) -> np.ndar
 class RuntimeState:
     """Mutable state shared between the GUI thread and the eval runner thread."""
 
-    mode: str = "basic"                   # one of: basic | traj | subtask | subgoal
+    mode: str = "basic"                   # one of: basic | traj | subtask | triple_cot | subgoal
     task: str = "put banana in the green plate"
 
     # --- subtask config (editable from GUI / JSON file) ---------------- #
@@ -478,12 +482,26 @@ class TrajectoryMode(ModeHandler):
         self._use_cached_once = False
         self._manual_provider = manual_provider
         self._manual_override = bool(manual_override)
+        self._pipeline_predictions: Dict[int, tuple[Any, np.ndarray]] = {}
+        self._pipeline_triggered_slots: set[int] = set()
+        self._pipeline_active_slot: Optional[int] = None
+        self._pipeline_threads: Dict[int, threading.Thread] = {}
+        self._pipeline_events: Dict[int, threading.Event] = {}
+        self._pipeline_generation = 0
+        self._manual_request_started_callback: Optional[Callable[[], None]] = None
 
     def reset(self) -> None:
         self._predictor.reset()
         with self._lock:
             self._last_blocking_control_step = None
             self._use_cached_once = False
+            self._pipeline_predictions.clear()
+            self._pipeline_triggered_slots.clear()
+            self._pipeline_active_slot = None
+            self._pipeline_threads.clear()
+            self._pipeline_events.clear()
+            self._pipeline_generation += 1
+            self._manual_request_started_callback = None
 
     def set_blocking(self, blocking: bool) -> None:
         self._predictor.set_blocking(blocking)
@@ -498,6 +516,196 @@ class TrajectoryMode(ModeHandler):
     def set_manual_trajectory_override(self, enabled: bool) -> None:
         with self._lock:
             self._manual_override = bool(enabled)
+
+    def _set_manual_request_started_callback(
+        self,
+        callback: Optional[Callable[[], None]],
+    ) -> None:
+        with self._lock:
+            self._manual_request_started_callback = callback
+
+    def _pop_manual_request_started_callback(self) -> Optional[Callable[[], None]]:
+        with self._lock:
+            callback = self._manual_request_started_callback
+            self._manual_request_started_callback = None
+            return callback
+
+    @staticmethod
+    def _call_manual_provider(
+        manual_provider: Callable[..., Any],
+        image: np.ndarray,
+        task: str,
+        cancel_check: Optional[Callable[[], bool]],
+        request_started: Optional[Callable[[], None]],
+    ):
+        if request_started is None:
+            return manual_provider(image, task, cancel_check)
+        try:
+            params = inspect.signature(manual_provider).parameters
+            accepts_hook = (
+                "request_started" in params
+                or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+            )
+        except (TypeError, ValueError):
+            accepts_hook = False
+        if accepts_hook:
+            return manual_provider(
+                image,
+                task,
+                cancel_check,
+                request_started=request_started,
+            )
+        request_started()
+        return manual_provider(image, task, cancel_check)
+
+    def _predict_trajectory_once(
+        self,
+        image: np.ndarray,
+        task: str,
+        cancel_check: Optional[Callable[[], bool]] = None,
+        *,
+        require_valid: bool = False,
+    ):
+        with self._lock:
+            manual_provider = self._manual_provider
+            manual_override = self._manual_override
+
+        while True:
+            if cancel_check is not None and cancel_check():
+                return None
+            if manual_override and manual_provider is not None:
+                request_started = self._pop_manual_request_started_callback()
+                pred = self._call_manual_provider(
+                    manual_provider,
+                    image.copy(),
+                    task,
+                    cancel_check,
+                    request_started,
+                )
+            else:
+                predictor_impl = getattr(self._predictor, "_predictor", None)
+                if predictor_impl is None:
+                    pred = self._predictor.refresh(image.copy(), task)
+                else:
+                    pred = predictor_impl.predict(image.copy(), task)
+            if pred is not None and not pred.is_empty():
+                return pred
+            if not require_valid:
+                return None
+            logger.info("Trajectory request returned no prediction; waiting for a finished annotation.")
+            time.sleep(0.1)
+
+    def _store_pipeline_prediction(
+        self,
+        slot: int,
+        image: np.ndarray,
+        pred,
+        generation: Optional[int] = None,
+    ) -> bool:
+        if pred is None or pred.is_empty():
+            return False
+        with self._lock:
+            if generation is not None and generation != self._pipeline_generation:
+                return False
+            self._pipeline_predictions[int(slot)] = (pred, image.copy())
+        return True
+
+    def _spawn_pipeline_request(
+        self,
+        slot: int,
+        image: np.ndarray,
+        task: str,
+        cancel_check: Optional[Callable[[], bool]],
+    ) -> None:
+        with self._lock:
+            if slot in self._pipeline_triggered_slots:
+                return
+            self._pipeline_triggered_slots.add(slot)
+            generation = self._pipeline_generation
+            done_evt = threading.Event()
+            self._pipeline_events[slot] = done_evt
+
+        img_copy = image.copy()
+
+        def _run() -> None:
+            try:
+                pred = self._predict_trajectory_once(
+                    img_copy,
+                    task,
+                    cancel_check=cancel_check,
+                    require_valid=False,
+                )
+                if self._store_pipeline_prediction(slot, img_copy, pred, generation):
+                    logger.info("Trajectory annotation for slot %d finished.", slot)
+                else:
+                    logger.info("Trajectory annotation for slot %d did not produce a prediction.", slot)
+            except Exception:
+                logger.exception("Trajectory annotation worker failed for slot %d", slot)
+            finally:
+                done_evt.set()
+
+        t = threading.Thread(target=_run, daemon=True, name=f"trajectory-annotate-{slot}")
+        with self._lock:
+            self._pipeline_threads[slot] = t
+        t.start()
+
+    def _wait_for_pipeline_slot(
+        self,
+        slot: int,
+        fallback_image: np.ndarray,
+        task: str,
+        cancel_check: Optional[Callable[[], bool]],
+    ) -> bool:
+        with self._lock:
+            event = self._pipeline_events.get(slot)
+            thread = self._pipeline_threads.get(slot)
+            already_ready = slot in self._pipeline_predictions
+        if already_ready:
+            return True
+
+        if event is not None:
+            logger.info("Trajectory pipeline waiting for annotation slot %d.", slot)
+            while not event.wait(timeout=0.1):
+                if cancel_check is not None and cancel_check():
+                    return False
+            if thread is not None:
+                thread.join(timeout=0.0)
+
+        with self._lock:
+            if slot in self._pipeline_predictions:
+                return True
+
+        logger.info(
+            "Trajectory annotation slot %d is missing or invalid; requesting it synchronously.",
+            slot,
+        )
+        pred = self._predict_trajectory_once(
+            fallback_image,
+            task,
+            cancel_check=cancel_check,
+            require_valid=True,
+        )
+        return self._store_pipeline_prediction(slot, fallback_image, pred)
+
+    def _apply_pipeline_slot(self, desired_slot: int, runtime: RuntimeState, task: str) -> bool:
+        with self._lock:
+            if self._pipeline_active_slot == desired_slot:
+                return False
+            if desired_slot not in self._pipeline_predictions:
+                return False
+            pred, image = self._pipeline_predictions[desired_slot]
+            self._pipeline_active_slot = desired_slot
+            self._use_cached_once = True
+
+        self._predictor.set_cached(pred, image)
+        self._store_prediction_visualization(runtime, image, pred, task)
+        return True
+
+    @staticmethod
+    def _desired_pipeline_slot(execution_slot: int) -> int:
+        if execution_slot <= 1:
+            return 0
+        return execution_slot - 1
 
     def before_control_step(
         self,
@@ -524,30 +732,46 @@ class TrajectoryMode(ModeHandler):
 
         with runtime._lock:
             task = runtime.task
-        with self._lock:
-            manual_provider = self._manual_provider
-            manual_override = self._manual_override
 
-        if manual_override and manual_provider is not None:
-            logger.info("Blocking trajectory mode waiting for manual trajectory at step %d", loop_step)
-            pred = None
-            while True:
-                if cancel_check is not None and cancel_check():
-                    return False
-                pred = manual_provider(cam_high.copy(), task, cancel_check)
-                if pred is not None and not pred.is_empty():
-                    break
-                logger.info("Manual trajectory dialog returned no prediction; waiting for a finished annotation.")
-                time.sleep(0.1)
-            self._predictor.set_cached(pred, cam_high)
-            self._store_prediction_visualization(runtime, cam_high, pred, task)
+        slot = loop_step // update_every
+        applied_changed = False
+        if slot == 0:
+            logger.info("Trajectory pipeline waiting for initial annotation at step 0")
+            pred = self._predict_trajectory_once(
+                cam_high,
+                task,
+                cancel_check=cancel_check,
+                require_valid=True,
+            )
+            if pred is None or pred.is_empty():
+                return False
+            self._store_pipeline_prediction(0, cam_high, pred)
+            applied_changed = self._apply_pipeline_slot(0, runtime, task)
+        elif slot == 1:
+            logger.info(
+                "Trajectory pipeline triggering annotation slot 1 at step %d without blocking execution.",
+                loop_step,
+            )
+            self._spawn_pipeline_request(1, cam_high, task, cancel_check)
         else:
-            logger.info("Blocking trajectory mode waiting for Doubao trajectory at step %d", loop_step)
-            self._predictor.refresh(cam_high, task)
+            desired_slot = self._desired_pipeline_slot(slot)
+            logger.info(
+                "Trajectory pipeline boundary step %d waiting for annotation slot %d.",
+                loop_step,
+                desired_slot,
+            )
+            if not self._wait_for_pipeline_slot(desired_slot, cam_high, task, cancel_check):
+                return False
+            applied_changed = self._apply_pipeline_slot(desired_slot, runtime, task)
+            logger.info(
+                "Trajectory pipeline triggering annotation slot %d at step %d without blocking execution.",
+                slot,
+                loop_step,
+            )
+            self._spawn_pipeline_request(slot, cam_high, task, cancel_check)
         with self._lock:
             self._last_blocking_control_step = loop_step
-            self._use_cached_once = True
-        return True
+        return applied_changed
 
     def _render_trajectory_image(self, image: np.ndarray, traj_text: str) -> Optional[np.ndarray]:
         try:
@@ -603,7 +827,7 @@ class TrajectoryMode(ModeHandler):
             pred = self._predictor.step(cam_high, task)
 
         if pred is None or pred.is_empty():
-            traj_text = ""
+            prompt_traj_text = ""
             prompt = task
             traj_image = None
         else:
@@ -615,6 +839,304 @@ class TrajectoryMode(ModeHandler):
             runtime.last_traj_text = prompt_traj_text
             runtime.last_traj_image = traj_image
             runtime.last_prompt = prompt
+        obs["prompt"] = prompt
+        return obs
+
+
+# ---------------------------------------------------------------------------
+class TripleCotMode(TrajectoryMode):
+    """Prompt mode combining task, live subtask label, and trajectory CoT.
+
+    The trajectory leg intentionally reuses ``TrajectoryMode``'s semi-block
+    pipeline path, but ``build_obs`` reads ``runtime.subtask_key`` at inference
+    time so GUI digit-key changes made during a manual/Doubao trajectory wait
+    are reflected in the next model prompt.
+    """
+
+    name = "triple_cot"
+
+    def __init__(
+        self,
+        predictor,
+        *,
+        manual_provider: Optional[Callable[..., Any]] = None,
+        manual_override: bool = False,
+        subgoal_handler: Optional[Any] = None,
+        foreact_timeout_s: float = 3.0,
+    ) -> None:
+        super().__init__(
+            predictor,
+            manual_provider=manual_provider,
+            manual_override=manual_override,
+        )
+        self._predictor.set_blocking(True)
+        self._subgoal_handler = subgoal_handler
+        self._foreact_timeout_s = max(0.1, float(foreact_timeout_s))
+        self._foreact_lock = threading.Lock()
+        self._foreact_start_times: Dict[int, float] = {}
+        self._foreact_timed_out_steps: set[int] = set()
+
+    def reset(self) -> None:
+        super().reset()
+        if self._subgoal_handler is not None:
+            self._subgoal_handler.reset()
+        with self._foreact_lock:
+            self._foreact_start_times.clear()
+            self._foreact_timed_out_steps.clear()
+
+    def set_blocking(self, blocking: bool) -> None:
+        # Triple-CoT is defined around the semi-block pipeline. Ignore attempts to relax it.
+        self._predictor.set_blocking(True)
+
+    def set_step_interval(self, n: int) -> None:
+        super().set_step_interval(n)
+        if self._subgoal_handler is not None:
+            self._subgoal_handler.set_step_interval(n)
+
+    def _should_generate_foreact(self, loop_step: int) -> bool:
+        if self._subgoal_handler is None:
+            return False
+        should_generate = getattr(self._subgoal_handler, "_should_generate_subgoal", None)
+        if callable(should_generate):
+            return bool(should_generate(loop_step))
+        update_every = self._predictor.update_every
+        if loop_step == 0:
+            return True
+        if loop_step == update_every:
+            return False
+        return loop_step > update_every and loop_step % update_every == 0
+
+    def _has_subgoal_cache(self) -> bool:
+        if self._subgoal_handler is None:
+            return False
+        with self._subgoal_handler._lock:
+            return bool(self._subgoal_handler._cache)
+
+    def _ensure_subgoal_fallback(self, raw_obs, runtime) -> bool:
+        """Keep Triple-CoT inference unblocked when ForeAct is unavailable.
+
+        If a previous subgoal exists, we keep it. Otherwise we install a blank
+        image with the same camera shape so the policy input schema remains
+        stable even when the ForeAct server is down.
+        """
+        if self._subgoal_handler is None:
+            return False
+        with self._subgoal_handler._lock:
+            if self._subgoal_handler._cache:
+                return False
+            cameras = list(self._subgoal_handler._cameras)
+
+        raw_images = raw_obs.get("images") or {}
+        installed = False
+        for cam in cameras:
+            img = raw_images.get(cam)
+            if img is None:
+                continue
+            blank = np.zeros_like(img, dtype=np.uint8)
+            self._subgoal_handler._store_subgoal(cam, blank, runtime)
+            installed = True
+        if installed:
+            logger.warning("ForeAct unavailable; using a blank Triple-CoT subgoal placeholder.")
+        return installed
+
+    def _start_foreact_async(self, raw_obs, runtime, loop_step: int) -> bool:
+        if self._subgoal_handler is None or not self._should_generate_foreact(loop_step):
+            return False
+
+        raw_images = raw_obs.get("images") or {}
+        with self._subgoal_handler._lock:
+            cameras = list(self._subgoal_handler._cameras)
+        if not any(cam in raw_images for cam in cameras):
+            return False
+
+        with runtime._lock:
+            task = runtime.task
+
+        try:
+            started = self._subgoal_handler._spawn_request(
+                raw_obs,
+                task,
+                runtime,
+                request_step=loop_step,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("ForeAct async request could not be started at step %d: %s", loop_step, e)
+            self._ensure_subgoal_fallback(raw_obs, runtime)
+            return False
+
+        if started:
+            with self._foreact_lock:
+                self._foreact_start_times[loop_step] = time.monotonic()
+            logger.info("Triple-CoT started ForeAct asynchronously at step %d.", loop_step)
+        return started
+
+    def _foreact_thread_for_step(self, loop_step: int) -> Optional[threading.Thread]:
+        if self._subgoal_handler is None:
+            return None
+        with self._subgoal_handler._lock:
+            if self._subgoal_handler._last_request_control_step != loop_step:
+                return None
+            return self._subgoal_handler._inflight
+
+    def _finish_foreact_with_timeout(
+        self,
+        raw_obs,
+        runtime,
+        loop_step: int,
+        cancel_check: Optional[Callable[[], bool]],
+    ) -> bool:
+        if self._subgoal_handler is None or not self._should_generate_foreact(loop_step):
+            return False
+
+        with self._foreact_lock:
+            started_at = self._foreact_start_times.get(loop_step)
+        thread = self._foreact_thread_for_step(loop_step)
+
+        if started_at is not None and thread is not None and thread.is_alive():
+            deadline = started_at + self._foreact_timeout_s
+            while thread.is_alive():
+                if cancel_check is not None and cancel_check():
+                    return False
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                thread.join(timeout=min(0.05, remaining))
+
+        if thread is not None and thread.is_alive():
+            with self._foreact_lock:
+                first_timeout = loop_step not in self._foreact_timed_out_steps
+                self._foreact_timed_out_steps.add(loop_step)
+            if first_timeout:
+                logger.warning(
+                    "ForeAct did not finish within %.1fs at step %d; continuing with cached/blank subgoal.",
+                    self._foreact_timeout_s,
+                    loop_step,
+                )
+            return self._ensure_subgoal_fallback(raw_obs, runtime)
+
+        if not self._has_subgoal_cache():
+            logger.warning(
+                "ForeAct produced no subgoal at step %d; continuing with a blank placeholder.",
+                loop_step,
+            )
+            return self._ensure_subgoal_fallback(raw_obs, runtime)
+
+        with self._subgoal_handler._lock:
+            self._subgoal_handler._last_blocking_control_step = loop_step
+            self._subgoal_handler._use_cached_once = True
+        return True
+
+    def before_control_step(
+        self,
+        raw_obs,
+        runtime,
+        loop_step: int,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> bool:
+        # Step 0 owns the only synchronous "open GUI, then wait" trajectory
+        # request. Start ForeAct immediately after the GUI request is emitted
+        # so the subgoal request runs while the human draws the trajectory.
+        if loop_step == 0 and self._should_generate_foreact(loop_step):
+            self._set_manual_request_started_callback(
+                lambda: self._start_foreact_async(raw_obs, runtime, loop_step)
+            )
+        else:
+            # At later k*N boundaries the relevant trajectory GUI was already
+            # launched N steps earlier; start ForeAct before waiting for that
+            # annotation to finish.
+            self._start_foreact_async(raw_obs, runtime, loop_step)
+        traj_changed = super().before_control_step(
+            raw_obs,
+            runtime,
+            loop_step,
+            cancel_check=cancel_check,
+        )
+        if self._should_generate_foreact(loop_step):
+            # Defensive fallback for non-GUI/manual providers that don't invoke
+            # the request-started hook.
+            self._start_foreact_async(raw_obs, runtime, loop_step)
+        subgoal_ready = self._finish_foreact_with_timeout(
+            raw_obs,
+            runtime,
+            loop_step,
+            cancel_check=cancel_check,
+        )
+        return subgoal_ready or traj_changed
+
+    @staticmethod
+    def _subtask_label(runtime: RuntimeState) -> str:
+        with runtime._lock:
+            labels = dict(runtime.subtask_labels)
+            key = runtime.subtask_key
+        if key not in labels and labels:
+            key = sorted(labels.keys())[0]
+        return labels.get(key, "")
+
+    @staticmethod
+    def _triple_prompt(task: str, subtask: str, traj_text: str) -> str:
+        return f"Task: {task}, subtask: {subtask}, traj: {traj_text}"
+
+    def _store_prediction_visualization(
+        self,
+        runtime: RuntimeState,
+        image: np.ndarray,
+        pred,
+        task: str,
+    ) -> None:
+        if pred is None or pred.is_empty():
+            return
+        prompt_traj_text = pred.to_loc_token_text()
+        traj_image = self._render_trajectory_image(image, prompt_traj_text)
+        subtask = self._subtask_label(runtime)
+        with runtime._lock:
+            runtime.last_subtask_label = subtask
+            runtime.last_traj_text = prompt_traj_text
+            runtime.last_traj_image = traj_image
+            runtime.last_prompt = self._triple_prompt(task, subtask, prompt_traj_text)
+
+    def build_obs(self, raw_obs, runtime):
+        obs = self._base_obs(raw_obs)
+
+        cam_high = raw_obs["images"]["cam_high"]
+        with runtime._lock:
+            task = runtime.task
+
+        self._predictor.set_update_callback(
+            lambda pred, image, runtime=runtime, task=task: self._store_prediction_visualization(
+                runtime,
+                image,
+                pred,
+                task,
+            )
+        )
+        with self._lock:
+            use_cached_once = self._use_cached_once
+            self._use_cached_once = False
+
+        pred = self._predictor.last
+        if pred is None or pred.is_empty():
+            pred = self._predictor.refresh(cam_high, task)
+        elif not use_cached_once and not self._predictor.blocking:
+            # Defensive fallback; set_blocking() above keeps this mode blocking.
+            pred = self._predictor.step(cam_high, task)
+
+        if pred is None or pred.is_empty():
+            prompt_traj_text = ""
+            traj_image = None
+        else:
+            prompt_traj_text = pred.to_loc_token_text()
+            traj_image = self._render_trajectory_image(cam_high, prompt_traj_text)
+
+        subtask = self._subtask_label(runtime)
+        prompt = self._triple_prompt(task, subtask, prompt_traj_text)
+
+        with runtime._lock:
+            runtime.last_subtask_label = subtask
+            runtime.last_traj_text = prompt_traj_text
+            runtime.last_traj_image = traj_image
+            runtime.last_prompt = prompt
+        if self._subgoal_handler is not None:
+            self._subgoal_handler.attach_cached_subgoal_images(obs)
         obs["prompt"] = prompt
         return obs
 
@@ -654,7 +1176,6 @@ class SubgoalMode(ModeHandler):
         self._update_every = max(1, int(update_every))
         self._cameras = list(cameras or ["cam_high"])
         self._blocking = bool(blocking)
-        self._async_start_step = 15
         self._step = 0
         self._initialized = False   # True once first subgoal image received
         self._lock = threading.Lock()
@@ -688,6 +1209,13 @@ class SubgoalMode(ModeHandler):
     def set_step_interval(self, n: int) -> None:
         self._update_every = max(1, int(n))
 
+    def _should_generate_subgoal(self, loop_step: int) -> bool:
+        if loop_step == 0:
+            return True
+        if loop_step == self._update_every:
+            return False
+        return loop_step > self._update_every and loop_step % self._update_every == 0
+
     def before_control_step(
         self,
         raw_obs,
@@ -707,41 +1235,7 @@ class SubgoalMode(ModeHandler):
         with runtime._lock:
             task = runtime.task
 
-        if not self._blocking:
-            with self._lock:
-                self._latest_control_step = loop_step
-                self._latest_task = task
-                self._latest_images = latest_images
-                if self._inflight is not None and not self._inflight.is_alive():
-                    logger.warning("Recovering stale ForeAct async request state")
-                    self._inflight = None
-                inflight = self._inflight is not None
-                should_request = (
-                    loop_step >= self._async_start_step
-                    and not inflight
-                    and loop_step > self._last_request_control_step
-                )
-                request_images = {cam: img.copy() for cam, img in self._latest_images.items()}
-            if should_request:
-                if self._last_request_control_step < 0:
-                    logger.info(
-                        "Non-blocking subgoal mode starting delayed ForeAct request at step %d",
-                        loop_step,
-                    )
-                else:
-                    logger.debug(
-                        "Non-blocking subgoal mode scheduling ForeAct request at step %d",
-                        loop_step,
-                    )
-                self._spawn_request(
-                    {"images": request_images},
-                    task,
-                    runtime,
-                    request_step=loop_step,
-                )
-            return False
-
-        if loop_step != 0 and loop_step % self._update_every != 0:
+        if not self._should_generate_subgoal(loop_step):
             return False
 
         with self._lock:
@@ -751,7 +1245,7 @@ class SubgoalMode(ModeHandler):
         if cancel_check is not None and cancel_check():
             return False
 
-        logger.info("Blocking subgoal mode waiting for fresh ForeAct subgoal at step %d", loop_step)
+        logger.info("Subgoal mode synchronously requesting ForeAct subgoal at step %d", loop_step)
         self._do_request(raw_obs, task, runtime)
         with self._lock:
             self._last_blocking_control_step = loop_step
@@ -779,7 +1273,7 @@ class SubgoalMode(ModeHandler):
             with runtime._lock:
                 runtime.last_subgoal_image = sg
 
-    def _do_request(self, raw_obs: Dict[str, Any], task: str, runtime: RuntimeState) -> None:
+    def _do_request(self, raw_obs: Dict[str, Any], task: str, runtime: RuntimeState) -> bool:
         """Synchronous ForeAct call; updates cache + runtime display."""
         updated = False
         for cam in self._cameras:
@@ -794,6 +1288,15 @@ class SubgoalMode(ModeHandler):
         if not updated:
             with self._lock:
                 self._initialized = True
+        return updated
+
+    def attach_cached_subgoal_images(self, obs: Dict[str, Any]) -> None:
+        with self._lock:
+            cache_snapshot = dict(self._cache)
+        if cache_snapshot:
+            obs["subgoal_images"] = {
+                cam: to_chw_uint8(img) for cam, img in cache_snapshot.items()
+            }
 
     def _spawn_request(
         self,
@@ -840,7 +1343,8 @@ class SubgoalMode(ModeHandler):
                         self._inflight = None
                     if (
                         not self._blocking
-                        and self._latest_control_step >= self._async_start_step
+                        and self._latest_control_step != 0
+                        and self._should_generate_subgoal(self._latest_control_step)
                         and self._latest_images
                         and generation == self._request_generation
                         and self._latest_control_step > self._last_request_control_step
@@ -907,11 +1411,16 @@ class SubgoalMode(ModeHandler):
             with self._lock:
                 cache_snapshot = dict(self._cache)
 
-        if cache_snapshot:
-            obs["subgoal_images"] = {
-                cam: to_chw_uint8(img) for cam, img in cache_snapshot.items()
-            }
+        self.attach_cached_subgoal_images(obs)
         return obs
+
+
+# ---------------------------------------------------------------------------
+class _ManualOnlyTrajectoryPredictor:
+    """Placeholder predictor used when trajectory CoT comes from the GUI."""
+
+    def predict(self, image: np.ndarray, task_description: str) -> None:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -933,7 +1442,7 @@ def make_handler(
     manual_traj_override: bool = False,
 ) -> ModeHandler:
     """Factory used by ``EvalRunner`` and CLI wrappers."""
-    mode = mode.lower()
+    mode = mode.lower().replace("-", "_")
     if mode == "basic":
         return BasicMode()
     if mode == "subtask":
@@ -946,20 +1455,20 @@ def make_handler(
         from .doubao_predictor import CachedTrajectoryPredictor, DoubaoTrajectoryPredictor
 
         if doubao_predictor is None:
-            try:
-                predictor_impl = DoubaoTrajectoryPredictor(api_key=doubao_api_key)
-            except Exception:
-                if not (manual_traj_override and manual_traj_provider is not None):
-                    raise
-                logger.info(
-                    "Doubao predictor is unavailable; starting trajectory mode with manual override only."
-                )
-
-                class _ManualOnlyTrajectoryPredictor:
-                    def predict(self, image: np.ndarray, task_description: str) -> None:
-                        return None
-
+            if manual_traj_provider is not None:
+                logger.info("Starting trajectory mode with manual annotation only.")
+                manual_traj_override = True
                 predictor_impl = _ManualOnlyTrajectoryPredictor()
+            else:
+                try:
+                    predictor_impl = DoubaoTrajectoryPredictor(api_key=doubao_api_key)
+                except Exception:
+                    if not (manual_traj_override and manual_traj_provider is not None):
+                        raise
+                    logger.info(
+                        "Doubao predictor is unavailable; starting trajectory mode with manual override only."
+                    )
+                    predictor_impl = _ManualOnlyTrajectoryPredictor()
             doubao_predictor = CachedTrajectoryPredictor(
                 predictor=predictor_impl,
                 update_every=traj_step_interval,
@@ -972,6 +1481,47 @@ def make_handler(
             predictor=doubao_predictor,
             manual_provider=manual_traj_provider,
             manual_override=manual_traj_override,
+        )
+    if mode == "triple_cot":
+        from .doubao_predictor import CachedTrajectoryPredictor
+        from .foreact_client import ForeactClient
+
+        if doubao_predictor is None:
+            if manual_traj_provider is None:
+                raise RuntimeError(
+                    "Triple-CoT requires a manual trajectory provider; Doubao is not used by default."
+                )
+            logger.info("Starting Triple-CoT mode with manual trajectory annotation only.")
+            manual_traj_override = True
+            predictor_impl = _ManualOnlyTrajectoryPredictor()
+            doubao_predictor = CachedTrajectoryPredictor(
+                predictor=predictor_impl,
+                update_every=traj_step_interval,
+                blocking=True,
+            )
+        else:
+            doubao_predictor.set_blocking(True)
+            doubao_predictor.set_update_every(traj_step_interval)
+        foreact_timeout_s = 3.0
+        if foreact_client is None:
+            foreact_client = ForeactClient(
+                host=foreact_host,
+                port=foreact_port,
+                connect_timeout=foreact_timeout_s,
+                request_timeout=foreact_timeout_s,
+            )
+        subgoal_handler = SubgoalMode(
+            client=foreact_client,
+            update_every=traj_step_interval,
+            cameras=subgoal_cameras,
+            blocking=True,
+        )
+        return TripleCotMode(
+            predictor=doubao_predictor,
+            manual_provider=manual_traj_provider,
+            manual_override=manual_traj_override,
+            subgoal_handler=subgoal_handler,
+            foreact_timeout_s=foreact_timeout_s,
         )
     if mode == "subgoal":
         from .foreact_client import ForeactClient

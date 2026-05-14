@@ -27,8 +27,9 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
 _MODE_DESCRIPTIONS = {
     "basic":   "Basic — VLA inference with task prompt only.",
-    "traj":    "Add Trajectory — Doubao predicts L/R waypoints (loc-tokens).",
+    "traj":    "Add Trajectory — manual L/R waypoint annotation by default.",
     "subtask": "Add Subtasks — keys 1-8 override the subtask label.",
+    "triple_cot": "Triple-CoT — semi-block task + live subtask + trajectory prompt.",
     "subgoal": "Add Subgoal Images — ForeAct generates cam_high subgoal.",
 }
 
@@ -48,12 +49,21 @@ _POLICY_PRESETS = {
         "config": "pi05_aloha_eggplant_subtask",
         "dir": "/home/agilex/agentic-openpi/checkpoints/pi05_aloha_eggplant_subtask/{step}",
     },
+    "triple_cot": {
+        "label": "triple-cot - eggplant all",
+        "config": "pi05_aloha_eggplant_all",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/pi05_aloha_eggplant_triple_cot/{step}",
+    },
     "subgoal": {
         "label": "subgoal - eggplant base camera",
         "config": "pi05_aloha_eggplant_subgoal_base",
         "dir": "/home/agilex/agentic-openpi/checkpoints/pi05_aloha_eggplant_subgoal_base/{step}",
     },
 }
+
+_SUBTASK_PROMPT_MODES = {"subtask", "triple_cot"}
+_TRAJECTORY_SOURCE_MODES = {"traj", "triple_cot"}
+_BLOCKING_ONLY_MODES = {"triple_cot"}
 
 _CHECKPOINT_HISTORY_LIMIT = 30
 _CHECKPOINT_HISTORY_ENV = "AGENTIC_OPENPI_EVAL_GUI_HISTORY"
@@ -175,9 +185,11 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         btn_row = QtWidgets.QHBoxLayout()
         self.bg_arm = QtWidgets.QButtonGroup(self)
         self.btn_left = QtWidgets.QPushButton("L (Left Arm)")
+        self.btn_left.setToolTip("Shortcut: A")
         self.btn_left.setCheckable(True)
         self.btn_left.setChecked(True)
         self.btn_right = QtWidgets.QPushButton("R (Right Arm)")
+        self.btn_right.setToolTip("Shortcut: D")
         self.btn_right.setCheckable(True)
         self.bg_arm.addButton(self.btn_left)
         self.bg_arm.addButton(self.btn_right)
@@ -187,13 +199,15 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         btn_row.addWidget(self.btn_right)
 
         self.btn_open = QtWidgets.QPushButton("Open Gripper")
+        self.btn_open.setToolTip("Shortcut: Q")
         self.btn_open.clicked.connect(lambda: self._append_item("open gripper"))
         btn_row.addWidget(self.btn_open)
         self.btn_close = QtWidgets.QPushButton("Close Gripper")
+        self.btn_close.setToolTip("Shortcut: W")
         self.btn_close.clicked.connect(lambda: self._append_item("close gripper"))
         btn_row.addWidget(self.btn_close)
         self.btn_undo = QtWidgets.QPushButton("Clear/Undo")
-        self.btn_undo.setToolTip("Remove the most recent point or gripper action.")
+        self.btn_undo.setToolTip("Remove the most recent point or gripper action. Shortcut: Z")
         self.btn_undo.clicked.connect(self._undo_last)
         btn_row.addWidget(self.btn_undo)
         btn_row.addStretch(1)
@@ -235,6 +249,23 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
             return
         event.ignore()
         QtWidgets.QApplication.beep()
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:  # noqa: N802
+        key = event.key()
+        if key == QtCore.Qt.Key_Q:
+            self.btn_open.click()
+        elif key == QtCore.Qt.Key_W:
+            self.btn_close.click()
+        elif key == QtCore.Qt.Key_A:
+            self.btn_left.click()
+        elif key == QtCore.Qt.Key_D:
+            self.btn_right.click()
+        elif key == QtCore.Qt.Key_Z:
+            self.btn_undo.click()
+        else:
+            super().keyPressEvent(event)
+            return
+        event.accept()
 
     def cancel_from_runner(self) -> None:
         self._force_close = True
@@ -361,6 +392,9 @@ class EvalGUI(QtWidgets.QMainWindow):
         self._ui_timer.setInterval(33)         # ~30 Hz refresh
         self._ui_timer.timeout.connect(self._refresh_ui)
         self._ui_timer.start()
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
 
     # ------------------------------------------------------------------ #
     def _build_ui(self) -> None:
@@ -376,7 +410,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         mode_row = QtWidgets.QHBoxLayout()
         mode_row.addWidget(QtWidgets.QLabel("Mode:"))
         self.cb_mode = QtWidgets.QComboBox()
-        for m in ("basic", "traj", "subtask", "subgoal"):
+        for m in ("basic", "traj", "subtask", "triple_cot", "subgoal"):
             self.cb_mode.addItem(m)
         self.cb_mode.currentTextChanged.connect(self._on_mode_changed)
         mode_row.addWidget(self.cb_mode)
@@ -492,13 +526,15 @@ class EvalGUI(QtWidgets.QMainWindow):
         sm_row.addWidget(self.sp_interval)
         left.addLayout(sm_row)
 
-        self.gb_traj_source = QtWidgets.QGroupBox("Trajectory source (Mode 2 blocking)")
+        self.gb_traj_source = QtWidgets.QGroupBox("Trajectory source (blocking modes)")
         traj_source_row = QtWidgets.QHBoxLayout(self.gb_traj_source)
         traj_source_row.addWidget(QtWidgets.QLabel("During blocking steps:"))
         self.bg_traj_source = QtWidgets.QButtonGroup(self)
         self.rb_traj_doubao = QtWidgets.QRadioButton("Doubao API")
         self.rb_traj_manual = QtWidgets.QRadioButton("Manual Annotation")
-        self.rb_traj_doubao.setChecked(True)
+        self.rb_traj_manual.setChecked(True)
+        with self._runtime._lock:
+            self._runtime.manual_traj_override = True
         self.bg_traj_source.addButton(self.rb_traj_doubao)
         self.bg_traj_source.addButton(self.rb_traj_manual)
         self.rb_traj_manual.toggled.connect(self._on_manual_traj_override_changed)
@@ -506,7 +542,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         traj_source_row.addWidget(self.rb_traj_manual)
         traj_source_row.addStretch(1)
         self.lbl_traj_source_note = QtWidgets.QLabel(
-            "Manual Annotation opens the native PyQt5 popup instead of calling Doubao."
+            "Manual Annotation is the default and does not require VOLCENKEY/ARK_API_KEY."
         )
         self.lbl_traj_source_note.setStyleSheet("color:#888;")
         traj_source_row.addWidget(self.lbl_traj_source_note)
@@ -578,10 +614,10 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.btn_load_json = QtWidgets.QPushButton("Load JSON…")
         self.btn_load_json.clicked.connect(self._on_load_subtask_json)
         sub_btn_row.addWidget(self.btn_load_json)
-        self.cb_doubao_auto = QtWidgets.QCheckBox("Doubao auto-suggest (placeholder)")
-        self.cb_doubao_auto.setEnabled(False)  # hook reserved; actual VLM is a TODO
+        self.cb_doubao_auto = QtWidgets.QCheckBox("Auto-suggest (placeholder)")
+        self.cb_doubao_auto.setEnabled(False)  # hook reserved; actual predictor is a TODO
         self.cb_doubao_auto.setToolTip(
-            "Reserved hook: enable to let a Doubao SubtaskPredictor pick the\n"
+            "Reserved hook: enable a future SubtaskPredictor to pick the\n"
             "subtask key automatically. The current implementation is a no-op\n"
             "placeholder — see doubao_predictor.SubtaskPredictor."
         )
@@ -650,6 +686,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.cb_mode.setCurrentText(self._runtime.mode)
         self.cb_mode.blockSignals(old)
         self._refresh_policy_fields_for_mode(self._runtime.mode, prefer_history=True)
+        self._sync_execution_controls_for_mode(self._runtime.mode)
         self._update_traj_source_controls()
 
     # ------------------------------------------------------------------ #
@@ -1138,7 +1175,31 @@ class EvalGUI(QtWidgets.QMainWindow):
             layout.addRow(f"key {k}:", self._make_subtask_row(k, labels[k]))
         self.btn_remove_subtask.setEnabled(len(labels) > 1)
 
+    @staticmethod
+    def _canonical_mode(mode: str) -> str:
+        return (mode or "").lower().replace("-", "_")
+
+    def _sync_execution_controls_for_mode(self, mode: str) -> None:
+        requires_blocking = self._canonical_mode(mode) in _BLOCKING_ONLY_MODES
+        if requires_blocking:
+            self._blocking = True
+            old_block = self.rb_block.blockSignals(True)
+            old_nonblock = self.rb_nonblock.blockSignals(True)
+            try:
+                self.rb_block.setChecked(True)
+                self.rb_nonblock.setChecked(False)
+            finally:
+                self.rb_block.blockSignals(old_block)
+                self.rb_nonblock.blockSignals(old_nonblock)
+
+        self.rb_nonblock.setEnabled(not requires_blocking)
+        self.rb_block.setEnabled(True)
+        note = "Triple-CoT uses the semi-block trajectory pipeline." if requires_blocking else ""
+        self.rb_nonblock.setToolTip(note)
+        self.rb_block.setToolTip(note)
+
     def _on_mode_changed(self, mode: str) -> None:
+        mode = self._canonical_mode(mode)
         if self._runner is not None and self.cb_local_policy.isChecked():
             self._log_error(
                 "Stop the run before changing mode while using the local policy server, "
@@ -1152,10 +1213,11 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.lbl_mode_help.setText(_MODE_DESCRIPTIONS.get(mode, ""))
         with self._runtime._lock:
             self._runtime.mode = mode
+        self._sync_execution_controls_for_mode(mode)
         self._refresh_policy_fields_for_mode(mode, prefer_history=True)
         self._update_traj_source_controls()
         # Sensible default step interval per mode.
-        defaults = {"traj": 60, "subgoal": 60, "subtask": 60}
+        defaults = {"traj": 60, "subgoal": 60, "subtask": 60, "triple_cot": 60}
         if mode in defaults:
             self.sp_interval.setValue(defaults[mode])
         if self._runner is None:
@@ -1170,13 +1232,18 @@ class EvalGUI(QtWidgets.QMainWindow):
         self._runner.set_handler(handler)
 
     def _build_handler(self, mode: str) -> _modes.ModeHandler:
+        mode = self._canonical_mode(mode)
         kwargs = dict(
             foreact_host=self.le_fhost.text().strip(),
             foreact_port=int(self.le_fport.text()),
-            blocking=self._blocking,
+            blocking=True if mode in _BLOCKING_ONLY_MODES else self._blocking,
         )
         n = int(self.sp_interval.value())
         if mode == "traj":
+            kwargs["traj_step_interval"] = n
+            kwargs["manual_traj_provider"] = self._request_manual_trajectory
+            kwargs["manual_traj_override"] = self._manual_traj_override_enabled()
+        elif mode == "triple_cot":
             kwargs["traj_step_interval"] = n
             kwargs["manual_traj_provider"] = self._request_manual_trajectory
             kwargs["manual_traj_override"] = self._manual_traj_override_enabled()
@@ -1189,9 +1256,18 @@ class EvalGUI(QtWidgets.QMainWindow):
     def _manual_traj_override_enabled(self) -> bool:
         return bool(getattr(self, "rb_traj_manual", None) and self.rb_traj_manual.isChecked())
 
-    def _request_manual_trajectory(self, image: np.ndarray, task: str, cancel_check=None):
+    def _request_manual_trajectory(
+        self,
+        image: np.ndarray,
+        task: str,
+        cancel_check=None,
+        *,
+        request_started=None,
+    ):
         req = _ManualTrajectoryRequest(image.copy(), task)
         self._bridge.manual_trajectory.emit(req)
+        if request_started is not None:
+            request_started()
         while not req.done.wait(timeout=0.1):
             if cancel_check is not None and cancel_check():
                 req.cancel_requested = True
@@ -1245,6 +1321,12 @@ class EvalGUI(QtWidgets.QMainWindow):
         self._log_error("Manual trajectory emergency stop: annotation discarded, inference paused, RTZ queued.")
 
     def _on_submode_changed(self, *_) -> None:
+        if self._runtime.mode in _BLOCKING_ONLY_MODES:
+            self._sync_execution_controls_for_mode(self._runtime.mode)
+            if self._handler is not None:
+                self._handler.set_blocking(True)
+            self._update_traj_source_controls()
+            return
         self._blocking = self.rb_block.isChecked()
         if self._handler is not None:
             self._handler.set_blocking(self._blocking)
@@ -1262,12 +1344,40 @@ class EvalGUI(QtWidgets.QMainWindow):
         self._log_info(f"Manual trajectory override {state}.")
 
     def _update_traj_source_controls(self) -> None:
-        enabled = self._runtime.mode == "traj" and self._blocking
+        mode = self._canonical_mode(self._runtime.mode)
+        enabled = mode in _TRAJECTORY_SOURCE_MODES and self._blocking
+        force_manual = mode in _TRAJECTORY_SOURCE_MODES
+        if force_manual:
+            old_manual = self.rb_traj_manual.blockSignals(True)
+            old_doubao = self.rb_traj_doubao.blockSignals(True)
+            try:
+                self.rb_traj_manual.setChecked(True)
+                self.rb_traj_doubao.setChecked(False)
+            finally:
+                self.rb_traj_manual.blockSignals(old_manual)
+                self.rb_traj_doubao.blockSignals(old_doubao)
+            with self._runtime._lock:
+                self._runtime.manual_traj_override = True
+            if self._handler is not None:
+                self._handler.set_manual_trajectory_provider(self._request_manual_trajectory)
+                self._handler.set_manual_trajectory_override(True)
+
         self.gb_traj_source.setVisible(enabled)
         self.gb_traj_source.setEnabled(enabled)
-        for widget in (self.rb_traj_doubao, self.rb_traj_manual, self.lbl_traj_source_note):
-            widget.setVisible(enabled)
-            widget.setEnabled(enabled)
+        self.rb_traj_doubao.setVisible(False)
+        self.rb_traj_doubao.setEnabled(False)
+        self.rb_traj_manual.setVisible(enabled)
+        self.rb_traj_manual.setEnabled(enabled)
+        self.lbl_traj_source_note.setVisible(enabled)
+        self.lbl_traj_source_note.setEnabled(enabled)
+        if mode == "triple_cot":
+            self.lbl_traj_source_note.setText(
+                "Triple-CoT uses manual trajectory annotation; no VOLCENKEY/ARK_API_KEY is required."
+            )
+        else:
+            self.lbl_traj_source_note.setText(
+                "Trajectory annotation uses the manual GUI; no VOLCENKEY/ARK_API_KEY is required."
+            )
 
     def _on_interval_changed(self, n: int) -> None:
         self._step_interval = int(n)
@@ -1282,6 +1392,8 @@ class EvalGUI(QtWidgets.QMainWindow):
             return
         self._runtime.set_subtask_key(key)
         label = labels[key]
+        if self._runtime.mode in _SUBTASK_PROMPT_MODES and self._runner is not None:
+            self._runner.request_replan()
         self._log_info(f"subtask key={key} ({label})")
 
     def _on_connect(self) -> None:
@@ -1376,9 +1488,9 @@ class EvalGUI(QtWidgets.QMainWindow):
                 images = obs.get("images", {})
                 cam_high = images.get("cam_high")
                 traj_image = snap.get("traj_image")
-                if snap.get("mode") == "traj" and traj_image is not None:
+                if snap.get("mode") in _TRAJECTORY_SOURCE_MODES and traj_image is not None:
                     cam_high = traj_image
-                    self.lbl_cam_title.setText("cam_high (Mode 2 trajectory overlay)")
+                    self.lbl_cam_title.setText("cam_high (trajectory overlay)")
                 else:
                     self.lbl_cam_title.setText("cam_high (live)")
                 self.lbl_cam.setPixmap(_np_to_qpixmap(cam_high, 480, 360))
@@ -1395,17 +1507,60 @@ class EvalGUI(QtWidgets.QMainWindow):
         if sg is not None:
             self.lbl_subgoal.setPixmap(_np_to_qpixmap(sg, 480, 360))
 
-        self.gb_subtask.setEnabled(snap["mode"] == "subtask")
+        self.gb_subtask.setEnabled(snap["mode"] in _SUBTASK_PROMPT_MODES)
         active = f"active: {snap['subtask_key']}"
         if snap.get("waiting_for_subtask_input"):
             active += " (waiting)"
         self.lbl_active_key.setText(active)
 
     # ------------------------------------------------------------------ #
+    def eventFilter(self, obj, event) -> bool:                          # noqa: N802
+        if (
+            event.type() == QtCore.QEvent.KeyPress
+            and self._handle_global_subtask_key(obj, event)
+        ):
+            return True
+        return super().eventFilter(obj, event)
+
+    def _handle_global_subtask_key(self, obj, event: QtGui.QKeyEvent) -> bool:
+        if self._runtime.mode not in _SUBTASK_PROMPT_MODES:
+            return False
+        if event.isAutoRepeat():
+            return False
+        if event.modifiers() & (
+            QtCore.Qt.ControlModifier | QtCore.Qt.AltModifier | QtCore.Qt.MetaModifier
+        ):
+            return False
+
+        text = event.text()
+        if len(text) != 1 or not text.isdigit() or text == "0":
+            return False
+
+        widget = obj if isinstance(obj, QtWidgets.QWidget) else QtWidgets.QApplication.focusWidget()
+        if self._runner is None and self._subtask_shortcut_should_ignore(widget):
+            return False
+
+        self._set_subtask(int(text))
+        event.accept()
+        return True
+
+    def _subtask_shortcut_should_ignore(self, widget: Optional[QtWidgets.QWidget]) -> bool:
+        while widget is not None:
+            if isinstance(widget, QtWidgets.QLineEdit) and not widget.isReadOnly():
+                return True
+            if isinstance(widget, (QtWidgets.QTextEdit, QtWidgets.QPlainTextEdit)) and not widget.isReadOnly():
+                return True
+            if isinstance(widget, QtWidgets.QAbstractSpinBox):
+                return True
+            if isinstance(widget, QtWidgets.QComboBox) and widget.isEditable():
+                return True
+            widget = widget.parentWidget()
+        return False
+
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:        # noqa: N802
         k = event.key()
         text = event.text()
-        if text.isdigit() and text != "0":
+        if self._runtime.mode in _SUBTASK_PROMPT_MODES and text.isdigit() and text != "0":
             self._set_subtask(int(text))
         elif k == QtCore.Qt.Key_Space:
             self._on_pause_toggle()
@@ -1420,6 +1575,9 @@ class EvalGUI(QtWidgets.QMainWindow):
 
     def closeEvent(self, event) -> None:                             # noqa: N802
         try:
+            app = QtWidgets.QApplication.instance()
+            if app is not None:
+                app.removeEventFilter(self)
             if self._runner is not None:
                 self._runner.stop()
             self._stop_policy_server()
@@ -1432,7 +1590,11 @@ def main() -> None:
     import argparse
 
     p = argparse.ArgumentParser(description="Aloha eval GUI")
-    p.add_argument("--mode", default="basic", choices=["basic", "traj", "subtask", "subgoal"])
+    p.add_argument(
+        "--mode",
+        default="basic",
+        choices=["basic", "traj", "subtask", "triple_cot", "triple-cot", "subgoal"],
+    )
     p.add_argument("--task", default="put the eggplant into the box")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
@@ -1454,7 +1616,7 @@ def main() -> None:
         dry_run=args.dry_run,
         dump_dir=args.dump_dir,
     )
-    runtime = _modes.RuntimeState(mode=args.mode, task=args.task)
+    runtime = _modes.RuntimeState(mode=EvalGUI._canonical_mode(args.mode), task=args.task)
 
     app = QtWidgets.QApplication(sys.argv)
     win = EvalGUI(cfg, runtime)
