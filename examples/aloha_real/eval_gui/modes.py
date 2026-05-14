@@ -52,16 +52,23 @@ logger = logging.getLogger(__name__)
 # These keys (1-8) match the operator controls in subtask mode.
 # At runtime the user can edit them in the GUI or load a JSON override.
 # ---------------------------------------------------------------------------
+# DEFAULT_SUBTASK_LABELS: Dict[int, str] = {
+#     1: "reach the handle of the lid",
+#     2: "Grasp the handle of the lid",
+#     3: "Move away the lid",
+#     4: "reach the eggplant",
+#     5: "grasp the eggplant",
+#     6: "Move the eggplant on the box",
+#     7: "Release the eggplant to the box",
+#     8: "Put the lid on the box",
+# }
 DEFAULT_SUBTASK_LABELS: Dict[int, str] = {
-    1: "reach the handle of the lid",
-    2: "Grasp the handle of the lid",
-    3: "Move away the lid",
-    4: "reach the eggplant",
-    5: "grasp the eggplant",
-    6: "Move the eggplant on the box",
-    7: "Release the eggplant to the box",
-    8: "Put the lid on the box",
+    1: "reach the cuboid",
+    2: "grasp the cuboid",
+    3: "Move the cuboid on the hole",
+    4: "Put the cuboid in the hole"
 }
+## cylinder, hexagon, triangular prism
 
 
 def to_chw_uint8(img_hwc_rgb: np.ndarray, h: int = 224, w: int = 224) -> np.ndarray:

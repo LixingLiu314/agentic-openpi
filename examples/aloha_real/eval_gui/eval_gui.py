@@ -35,29 +35,29 @@ _MODE_DESCRIPTIONS = {
 
 _POLICY_PRESETS = {
     "basic": {
-        "label": "basic - eggplant baseline",
-        "config": "pi05_aloha_eggplant_baseline",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/pi05_aloha_eggplant_baseline/eggplant_potato_lr2_5_bseline/{step}",
+        "label": "basic - correct object baseline",
+        "config": "pi05_aloha_object_baseline",
+        "dir": "/home/agilex/workspace/xiahongyu/agentic-openpi/checkpoints/correct_object/pi05_aloha_object_baseline/object_baseline_accurategripper/{step}",
     },
     "traj": {
-        "label": "traj - eggplant baseline",
-        "config": "pi05_aloha_eggplant_baseline",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/pi05_aloha_eggplant_traj/{step}",
+        "label": "traj - correct object trajectory cot",
+        "config": "pi05_aloha_object_traj",
+        "dir": "/home/agilex/workspace/xiahongyu/agentic-openpi/checkpoints/correct_object/pi05_aloha_object_traj/object_traj/{step}",
     },
     "subtask": {
-        "label": "subtask - eggplant labels",
-        "config": "pi05_aloha_eggplant_subtask",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/pi05_aloha_eggplant_subtask/{step}",
+        "label": "subtask - correct object labels",
+        "config": "pi05_aloha_object_subtask",
+        "dir": "/home/agilex/workspace/xiahongyu/agentic-openpi/checkpoints/correct_object/pi05_aloha_object_subtask/object_subtask_accurategripper/{step}",
     },
     "triple_cot": {
-        "label": "triple-cot - eggplant all",
-        "config": "pi05_aloha_eggplant_all",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/pi05_aloha_eggplant_triple_cot/{step}",
+        "label": "triple-cot - correct object all cot",
+        "config": "pi05_aloha_object_all_cot",
+        "dir": "/home/agilex/workspace/xiahongyu/agentic-openpi/checkpoints/correct_object/pi05_aloha_object_all_cot/object_all_cot/{step}",
     },
     "subgoal": {
-        "label": "subgoal - eggplant base camera",
-        "config": "pi05_aloha_eggplant_subgoal_base",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/pi05_aloha_eggplant_subgoal_base/{step}",
+        "label": "subgoal - correct object base camera",
+        "config": "pi05_aloha_object_subgoal",
+        "dir": "/home/agilex/workspace/xiahongyu/agentic-openpi/checkpoints/correct_object/pi05_aloha_object_subgoal/{step}",
     },
 }
 
@@ -1595,7 +1595,7 @@ def main() -> None:
         default="basic",
         choices=["basic", "traj", "subtask", "triple_cot", "triple-cot", "subgoal"],
     )
-    p.add_argument("--task", default="put the eggplant into the box")
+    p.add_argument("--task", default="put the correct object into the hole")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--action_horizon", type=int, default=25)
