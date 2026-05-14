@@ -1,7 +1,7 @@
 """
 Step 3 — Create aloha_object_lerobot_gripper_binary from aloha_object_lerobot.
 Changes to action only:
-  - Joint  6 (left  gripper) zeroed out: 0.00 (left arm is inactive in this task)
+  - Joint  6 (left  gripper) binarized: always 0.09 (OPEN_VAL) because raw value ~0.165 > CLOSE_THRESH
   - Joint 13 (right gripper) binarized: < 0.05 → 0.00, >= 0.05 → 0.09
   - All other joints (0-5, 7-12) unchanged
 
@@ -26,16 +26,16 @@ import shutil
 import numpy as np
 import pandas as pd
 
-SRC = pathlib.Path(__file__).parent / "correct_object" / "aloha_object_lerobot"
-DST = pathlib.Path(__file__).parent / "correct_object" / "aloha_object_lerobot_gripper_binary"
+SRC = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/avoid_obstable/aloha_banana_obstacle")
+DST = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/avoid_obstable/aloha_banana_obstacle_gripper_binary")
 
-LEFT_GRIPPER_JOINT = 6    # left gripper zeroed out (left arm inactive)
+LEFT_GRIPPER_JOINT = 6    # left gripper binarized (always open → OPEN_VAL)
 GRIPPER_JOINT      = 13   # right gripper binarized
 CLOSE_THRESH       = 0.05
 OPEN_VAL           = 0.09
 CLOSE_VAL          = 0.00
 
-NEW_REPO_ID = "local/aloha_object_gripper_binary"
+NEW_REPO_ID = "local/aloha_banana_obstacle_gripper_binary"
 
 # Video path columns stored in parquet — must be dropped so lerobot
 # decodes frames from the actual video files rather than returning path strings.
@@ -48,7 +48,9 @@ VIDEO_COLS = [
 
 def binarize_action(action: np.ndarray) -> np.ndarray:
     action = action.copy()
-    action[:, LEFT_GRIPPER_JOINT] = 0.0
+    action[:, LEFT_GRIPPER_JOINT] = np.where(
+        action[:, LEFT_GRIPPER_JOINT] < CLOSE_THRESH, CLOSE_VAL, OPEN_VAL
+    )
     action[:, GRIPPER_JOINT] = np.where(
         action[:, GRIPPER_JOINT] < CLOSE_THRESH, CLOSE_VAL, OPEN_VAL
     )
