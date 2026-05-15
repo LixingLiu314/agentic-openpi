@@ -13,8 +13,8 @@ import pathlib
 import h5py
 import pandas as pd
 
-DATASET_DIR = pathlib.Path(__file__).parent / "correct_object" / "aloha_object_lerobot"
-HDF5_ROOT   = pathlib.Path(__file__).parent / "correct_object" / "put_the_correct_object_into_the_hole_hdf5"
+DATASET_DIR = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/avoid_obstable/aloha_banana_obstacle")
+HDF5_ROOT   = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/avoid_obstable/put_the_banana_on_the_plate")
 
 
 def hdf5_path(source_path: str) -> pathlib.Path:

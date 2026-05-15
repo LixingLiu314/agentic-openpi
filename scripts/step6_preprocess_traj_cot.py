@@ -27,7 +27,7 @@ import re
 import pandas as pd
 import tqdm
 
-DATASET_DIR    = pathlib.Path(__file__).parent / "correct_object" / "aloha_object_lerobot_gripper_binary"
+DATASET_DIR    = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/avoid_obstable/aloha_banana_obstacle_gripper_binary")
 COT_JSON       = DATASET_DIR / "trajectory_data" / "cot_text_prompts.json"
 PARQUET_DIR    = DATASET_DIR / "data" / "chunk-000"
 EPISODES_JSONL = DATASET_DIR / "meta" / "episodes.jsonl"

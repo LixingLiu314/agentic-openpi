@@ -26,12 +26,12 @@ import av
 import pandas as pd
 import tqdm
 
-DATASET_DIR = pathlib.Path(__file__).parent / "correct_object" / "aloha_object_lerobot_gripper_binary"
+DATASET_DIR = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/avoid_obstable/aloha_banana_obstacle_gripper_binary")
 PARQUET_DIR = DATASET_DIR / "data" / "chunk-000"
 VIDEO_DIR   = DATASET_DIR / "videos" / "chunk-000"
 
 SUBGOAL_WINDOW = 60
-NUM_EPISODES   = 206
+NUM_EPISODES   = 200
 SUBGOAL_CAM    = "cam_high"
 SUBGOAL_KEY    = f"observation.images.{SUBGOAL_CAM}_subgoal"
 
