@@ -35,29 +35,29 @@ _MODE_DESCRIPTIONS = {
 
 _POLICY_PRESETS = {
     "basic": {
-        "label": "basic - correct object baseline",
-        "config": "pi05_aloha_object_baseline",
-        "dir": "/home/agilex/workspace/xiahongyu/agentic-openpi/checkpoints/correct_object/pi05_aloha_object_baseline/object_baseline_accurategripper/{step}",
+        "label": "basic - obstacle baseline",
+        "config": "pi05_aloha_obstacle_baseline",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/obstacle/pi05_aloha_obstacle_baseline/obstacle_baseline/{step}",
     },
     "traj": {
-        "label": "traj - correct object trajectory cot",
-        "config": "pi05_aloha_object_traj",
-        "dir": "/home/agilex/workspace/xiahongyu/agentic-openpi/checkpoints/correct_object/pi05_aloha_object_traj/object_traj/{step}",
+        "label": "traj - obstacle trajectory cot",
+        "config": "pi05_aloha_obstacle_traj",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/obstacle/pi05_aloha_obstacle_traj/obstacle_traj/{step}",
     },
     "subtask": {
-        "label": "subtask - correct object labels",
-        "config": "pi05_aloha_object_subtask",
-        "dir": "/home/agilex/workspace/xiahongyu/agentic-openpi/checkpoints/correct_object/pi05_aloha_object_subtask/object_subtask_accurategripper/{step}",
+        "label": "subtask - obstacle labels",
+        "config": "pi05_aloha_obstacle_subtask",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/obstacle/pi05_aloha_obstacle_subtask/obstacle_subtask/{step}",
     },
     "triple_cot": {
-        "label": "triple-cot - correct object all cot",
-        "config": "pi05_aloha_object_all_cot",
-        "dir": "/home/agilex/workspace/xiahongyu/agentic-openpi/checkpoints/correct_object/pi05_aloha_object_all_cot/object_all_cot/{step}",
+        "label": "triple-cot - obstacle all cot",
+        "config": "pi05_aloha_obstacle_all_cot",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/obstacle/pi05_aloha_obstacle_all_cot/obstacle_all_cot/{step}",
     },
     "subgoal": {
-        "label": "subgoal - correct object base camera",
-        "config": "pi05_aloha_object_subgoal",
-        "dir": "/home/agilex/workspace/xiahongyu/agentic-openpi/checkpoints/correct_object/pi05_aloha_object_subgoal/{step}",
+        "label": "subgoal - obstacle base camera",
+        "config": "pi05_aloha_obstacle_subgoal",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/obstacle/pi05_aloha_obstacle_subgoal/obstacle_subgoal/{step}",
     },
 }
 
