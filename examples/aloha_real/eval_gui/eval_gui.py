@@ -64,6 +64,8 @@ _POLICY_PRESETS = {
 _SUBTASK_PROMPT_MODES = {"subtask", "triple_cot"}
 _TRAJECTORY_SOURCE_MODES = {"traj", "triple_cot"}
 _BLOCKING_ONLY_MODES = {"triple_cot"}
+_TRAJ_ANNOTATION_ARMS = {"both", "left", "right"}
+_TRAJ_MODE_DEFAULT_INACTIVE_PIXEL = (201.0, 666.0)
 
 _CHECKPOINT_HISTORY_LIMIT = 30
 _CHECKPOINT_HISTORY_ENV = "AGENTIC_OPENPI_EVAL_GUI_HISTORY"
@@ -85,9 +87,25 @@ def _np_to_qpixmap(img_hwc_rgb: Optional[np.ndarray], target_w: int, target_h: i
 class _ManualTrajectoryRequest:
     """Thread handoff object used by the runner to request a GUI annotation."""
 
-    def __init__(self, image: np.ndarray, task: str) -> None:
+    def __init__(
+        self,
+        image: np.ndarray,
+        task: str,
+        *,
+        annotate_arm: str = "both",
+        right_only: bool = False,
+        default_left_pixel: Optional[tuple[float, float]] = None,
+        default_right_pixel: Optional[tuple[float, float]] = None,
+    ) -> None:
         self.image = image
         self.task = task
+        if right_only:
+            annotate_arm = "right"
+        self.annotate_arm = annotate_arm if annotate_arm in _TRAJ_ANNOTATION_ARMS else "both"
+        self.right_only = self.annotate_arm == "right"
+        self.left_only = self.annotate_arm == "left"
+        self.default_left_pixel = default_left_pixel
+        self.default_right_pixel = default_right_pixel
         self.done = threading.Event()
         self.prediction = None
         self.cancel_requested = False
@@ -155,7 +173,17 @@ class _TrajectoryImageLabel(QtWidgets.QLabel):
 class ManualTrajectoryDialog(QtWidgets.QDialog):
     """Modal trajectory annotation dialog shown on the Qt main thread."""
 
-    def __init__(self, image: np.ndarray, task: str, parent=None) -> None:
+    def __init__(
+        self,
+        image: np.ndarray,
+        task: str,
+        parent=None,
+        *,
+        annotate_arm: str = "both",
+        right_only: bool = False,
+        default_left_pixel: Optional[tuple[float, float]] = None,
+        default_right_pixel: Optional[tuple[float, float]] = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Manual Trajectory Annotation")
         self.setModal(True)
@@ -165,12 +193,22 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         if arr.dtype != np.uint8:
             arr = np.clip(arr, 0, 255).astype(np.uint8)
         self._base_image = arr.copy()
-        self._active_arm = "left"
+        if right_only:
+            annotate_arm = "right"
+        self._annotate_arm = annotate_arm if annotate_arm in _TRAJ_ANNOTATION_ARMS else "both"
+        self._single_arm = self._annotate_arm if self._annotate_arm in {"left", "right"} else None
+        self._right_only = self._annotate_arm == "right"
+        self._left_only = self._annotate_arm == "left"
+        self._active_arm = self._single_arm or "left"
         self._items: dict[str, list[str]] = {"left": [], "right": []}
         self._history: list[tuple[str, str]] = []
         self._prediction = None
         self._force_close = False
         self._aborted = False
+        if self._right_only and default_left_pixel is not None:
+            self._items["left"].append(self._default_position_token(default_left_pixel))
+        if self._left_only and default_right_pixel is not None:
+            self._items["right"].append(self._default_position_token(default_right_pixel))
 
         root = QtWidgets.QVBoxLayout(self)
         self.lbl_task = QtWidgets.QLabel(f"Task: {task}")
@@ -187,10 +225,15 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         self.btn_left = QtWidgets.QPushButton("L (Left Arm)")
         self.btn_left.setToolTip("Shortcut: A")
         self.btn_left.setCheckable(True)
-        self.btn_left.setChecked(True)
+        self.btn_left.setChecked(self._active_arm == "left")
+        self.btn_left.setEnabled(self._arm_selectable("left"))
+        self.btn_left.setVisible(self._arm_selectable("left"))
         self.btn_right = QtWidgets.QPushButton("R (Right Arm)")
         self.btn_right.setToolTip("Shortcut: D")
         self.btn_right.setCheckable(True)
+        self.btn_right.setChecked(self._active_arm == "right")
+        self.btn_right.setEnabled(self._arm_selectable("right"))
+        self.btn_right.setVisible(self._arm_selectable("right"))
         self.bg_arm.addButton(self.btn_left)
         self.bg_arm.addButton(self.btn_right)
         self.btn_left.clicked.connect(lambda: self._set_active_arm("left"))
@@ -228,6 +271,8 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         self.lbl_sequence.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         root.addWidget(self.lbl_sequence)
         self._refresh_sequence()
+        if self._single_arm is not None:
+            self._refresh_preview()
 
     @property
     def prediction(self):
@@ -256,9 +301,9 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
             self.btn_open.click()
         elif key == QtCore.Qt.Key_W:
             self.btn_close.click()
-        elif key == QtCore.Qt.Key_A:
+        elif key == QtCore.Qt.Key_A and self._arm_selectable("left"):
             self.btn_left.click()
-        elif key == QtCore.Qt.Key_D:
+        elif key == QtCore.Qt.Key_D and self._arm_selectable("right"):
             self.btn_right.click()
         elif key == QtCore.Qt.Key_Z:
             self.btn_undo.click()
@@ -277,7 +322,19 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         self._force_close = True
         super().reject()
 
+    @staticmethod
+    def _default_position_token(pixel: tuple[float, float]) -> str:
+        x, y = pixel
+        loc_x = max(0, min(int(round(float(x))), 1000))
+        loc_y = max(0, min(int(round(float(y))), 1000))
+        return f"<loc{loc_x:04d}><loc{loc_y:04d}>"
+
+    def _arm_selectable(self, arm: str) -> bool:
+        return self._single_arm is None or self._single_arm == arm
+
     def _set_active_arm(self, arm: str) -> None:
+        if not self._arm_selectable(arm):
+            return
         self._active_arm = arm
         self.btn_left.setChecked(arm == "left")
         self.btn_right.setChecked(arm == "right")
@@ -308,10 +365,17 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
 
     def _finish(self) -> None:
         if not self._items["left"] or not self._items["right"]:
+            if self._single_arm is not None:
+                message = (
+                    f"Add at least one point or gripper action for the {self._single_arm} "
+                    "arm before finishing."
+                )
+            else:
+                message = "Add at least one point or gripper action for both arms before finishing."
             QtWidgets.QMessageBox.warning(
                 self,
                 "Missing Trajectory",
-                "Add at least one point or gripper action for both arms before finishing.",
+                message,
             )
             return
         self._prediction = build_manual_prediction(self._items["left"], self._items["right"])
@@ -321,7 +385,7 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         return build_manual_prediction(self._items["left"], self._items["right"]).to_loc_token_text()
 
     def _refresh_preview(self) -> None:
-        if not self._history:
+        if not self._items["left"] and not self._items["right"]:
             self.image_label.set_source_image(self._base_image)
             return
         try:
@@ -526,8 +590,9 @@ class EvalGUI(QtWidgets.QMainWindow):
         sm_row.addWidget(self.sp_interval)
         left.addLayout(sm_row)
 
-        self.gb_traj_source = QtWidgets.QGroupBox("Trajectory source (blocking modes)")
-        traj_source_row = QtWidgets.QHBoxLayout(self.gb_traj_source)
+        self.gb_traj_source = QtWidgets.QGroupBox("Trajectory annotation")
+        traj_source_layout = QtWidgets.QVBoxLayout(self.gb_traj_source)
+        traj_source_row = QtWidgets.QHBoxLayout()
         traj_source_row.addWidget(QtWidgets.QLabel("During blocking steps:"))
         self.bg_traj_source = QtWidgets.QButtonGroup(self)
         self.rb_traj_doubao = QtWidgets.QRadioButton("Doubao API")
@@ -546,6 +611,33 @@ class EvalGUI(QtWidgets.QMainWindow):
         )
         self.lbl_traj_source_note.setStyleSheet("color:#888;")
         traj_source_row.addWidget(self.lbl_traj_source_note)
+        traj_source_layout.addLayout(traj_source_row)
+
+        traj_arm_row = QtWidgets.QHBoxLayout()
+        self.lbl_traj_annotate = QtWidgets.QLabel("Annotate:")
+        traj_arm_row.addWidget(self.lbl_traj_annotate)
+        self.cb_traj_annotate_arm = QtWidgets.QComboBox()
+        self.cb_traj_annotate_arm.addItem("Right arm only", "right")
+        self.cb_traj_annotate_arm.addItem("Left arm only", "left")
+        self.cb_traj_annotate_arm.addItem("Both arms", "both")
+        self.cb_traj_annotate_arm.setToolTip(
+            "For single-arm annotation, the inactive arm uses the default loc position below."
+        )
+        traj_arm_row.addWidget(self.cb_traj_annotate_arm)
+        self.lbl_traj_inactive_default = QtWidgets.QLabel("inactive default loc:")
+        traj_arm_row.addWidget(self.lbl_traj_inactive_default)
+        self.sp_traj_default_x = QtWidgets.QSpinBox()
+        self.sp_traj_default_x.setRange(0, 1000)
+        self.sp_traj_default_x.setValue(int(_TRAJ_MODE_DEFAULT_INACTIVE_PIXEL[0]))
+        self.sp_traj_default_x.setPrefix("x=")
+        self.sp_traj_default_y = QtWidgets.QSpinBox()
+        self.sp_traj_default_y.setRange(0, 1000)
+        self.sp_traj_default_y.setValue(int(_TRAJ_MODE_DEFAULT_INACTIVE_PIXEL[1]))
+        self.sp_traj_default_y.setPrefix("y=")
+        traj_arm_row.addWidget(self.sp_traj_default_x)
+        traj_arm_row.addWidget(self.sp_traj_default_y)
+        traj_arm_row.addStretch(1)
+        traj_source_layout.addLayout(traj_arm_row)
         left.addWidget(self.gb_traj_source)
 
         # Run buttons
@@ -1256,6 +1348,20 @@ class EvalGUI(QtWidgets.QMainWindow):
     def _manual_traj_override_enabled(self) -> bool:
         return bool(getattr(self, "rb_traj_manual", None) and self.rb_traj_manual.isChecked())
 
+    def _traj_annotation_arm(self) -> str:
+        combo = getattr(self, "cb_traj_annotate_arm", None)
+        if combo is None:
+            return "right"
+        value = combo.currentData()
+        return value if value in _TRAJ_ANNOTATION_ARMS else "right"
+
+    def _traj_inactive_default_pixel(self) -> tuple[float, float]:
+        spin_x = getattr(self, "sp_traj_default_x", None)
+        spin_y = getattr(self, "sp_traj_default_y", None)
+        if spin_x is None or spin_y is None:
+            return _TRAJ_MODE_DEFAULT_INACTIVE_PIXEL
+        return float(spin_x.value()), float(spin_y.value())
+
     def _request_manual_trajectory(
         self,
         image: np.ndarray,
@@ -1264,7 +1370,17 @@ class EvalGUI(QtWidgets.QMainWindow):
         *,
         request_started=None,
     ):
-        req = _ManualTrajectoryRequest(image.copy(), task)
+        with self._runtime._lock:
+            mode = self._canonical_mode(self._runtime.mode)
+        annotate_arm = self._traj_annotation_arm() if mode == "traj" else "both"
+        inactive_default = self._traj_inactive_default_pixel()
+        req = _ManualTrajectoryRequest(
+            image.copy(),
+            task,
+            annotate_arm=annotate_arm,
+            default_left_pixel=inactive_default if annotate_arm == "right" else None,
+            default_right_pixel=inactive_default if annotate_arm == "left" else None,
+        )
         self._bridge.manual_trajectory.emit(req)
         if request_started is not None:
             request_started()
@@ -1284,10 +1400,30 @@ class EvalGUI(QtWidgets.QMainWindow):
             req.cancel()
             return
 
-        dialog = ManualTrajectoryDialog(req.image, req.task, self)
+        dialog = ManualTrajectoryDialog(
+            req.image,
+            req.task,
+            self,
+            annotate_arm=req.annotate_arm,
+            default_left_pixel=req.default_left_pixel,
+            default_right_pixel=req.default_right_pixel,
+        )
         self._manual_traj_request = req
         self._manual_traj_dialog = dialog
-        self._log_info("Manual trajectory annotation requested.")
+        if req.annotate_arm == "right":
+            x, y = req.default_left_pixel or _TRAJ_MODE_DEFAULT_INACTIVE_PIXEL
+            self._log_info(
+                "Manual trajectory annotation requested: right arm only; "
+                f"left arm defaults to loc ({int(round(x))}, {int(round(y))})."
+            )
+        elif req.annotate_arm == "left":
+            x, y = req.default_right_pixel or _TRAJ_MODE_DEFAULT_INACTIVE_PIXEL
+            self._log_info(
+                "Manual trajectory annotation requested: left arm only; "
+                f"right arm defaults to loc ({int(round(x))}, {int(round(y))})."
+            )
+        else:
+            self._log_info("Manual trajectory annotation requested.")
         try:
             result = dialog.exec_()
             if req.cancel_requested:
@@ -1345,7 +1481,7 @@ class EvalGUI(QtWidgets.QMainWindow):
 
     def _update_traj_source_controls(self) -> None:
         mode = self._canonical_mode(self._runtime.mode)
-        enabled = mode in _TRAJECTORY_SOURCE_MODES and self._blocking
+        enabled = mode in _TRAJECTORY_SOURCE_MODES
         force_manual = mode in _TRAJECTORY_SOURCE_MODES
         if force_manual:
             old_manual = self.rb_traj_manual.blockSignals(True)
@@ -1370,13 +1506,23 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.rb_traj_manual.setEnabled(enabled)
         self.lbl_traj_source_note.setVisible(enabled)
         self.lbl_traj_source_note.setEnabled(enabled)
+        arm_config_enabled = enabled and mode == "traj"
+        for widget in (
+            self.lbl_traj_annotate,
+            self.cb_traj_annotate_arm,
+            self.lbl_traj_inactive_default,
+            self.sp_traj_default_x,
+            self.sp_traj_default_y,
+        ):
+            widget.setVisible(arm_config_enabled)
+            widget.setEnabled(arm_config_enabled)
         if mode == "triple_cot":
             self.lbl_traj_source_note.setText(
                 "Triple-CoT uses manual trajectory annotation; no VOLCENKEY/ARK_API_KEY is required."
             )
         else:
             self.lbl_traj_source_note.setText(
-                "Trajectory annotation uses the manual GUI; no VOLCENKEY/ARK_API_KEY is required."
+                "Trajectory annotation uses the manual GUI; choose which arm to annotate below."
             )
 
     def _on_interval_changed(self, n: int) -> None:
