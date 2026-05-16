@@ -62,14 +62,19 @@ logger = logging.getLogger(__name__)
 #     7: "Release the eggplant to the box",
 #     8: "Put the lid on the box",
 # }
-DEFAULT_SUBTASK_LABELS: Dict[int, str] = {
-    1: "reach the cuboid",
-    2: "grasp the cuboid",
-    3: "Move the cuboid on the hole",
-    4: "Put the cuboid in the hole"
-}
+# DEFAULT_SUBTASK_LABELS: Dict[int, str] = {
+#     1: "reach the cuboid",
+#     2: "grasp the cuboid",
+#     3: "Move the cuboid on the hole",
+#     4: "Put the cuboid in the hole"
+# }
 ## cylinder, hexagon, triangular prism
-
+DEFAULT_SUBTASK_LABELS: Dict[int, str] = {
+    1: "reach the banana",
+    2: "grasp the banana",
+    3: "move the banana while avoiding obstacle",
+    4: "place the banana on the plate",
+}
 
 def to_chw_uint8(img_hwc_rgb: np.ndarray, h: int = 224, w: int = 224) -> np.ndarray:
     """HxWx3 uint8 RGB -> (3, h, w) uint8 with the same resize/pad as training."""
@@ -1161,8 +1166,9 @@ class SubgoalMode(ModeHandler):
     according to the config's ``subgoal_camera_map``.
 
     Two execution sub-modes:
-      * non-blocking -- request fired on a background thread; control loop
-                        keeps stepping with the cached subgoal.
+      * non-blocking -- wait once for the initial subgoal, then refresh on a
+                        background thread while the control loop keeps stepping
+                        with the cached subgoal.
       * blocking     -- every ``step_interval`` steps the loop pauses and
                         synchronously waits for a fresh subgoal.
     """
@@ -1242,6 +1248,48 @@ class SubgoalMode(ModeHandler):
         with runtime._lock:
             task = runtime.task
 
+        if not self._blocking:
+            with self._lock:
+                need_initial_wait = not self._initialized and not self._cache
+            if need_initial_wait:
+                if cancel_check is not None and cancel_check():
+                    return False
+                logger.info(
+                    "Subgoal async mode waiting for initial ForeAct subgoal at step %d",
+                    loop_step,
+                )
+                updated = self._do_request(raw_obs, task, runtime)
+                if not updated:
+                    self._ensure_subgoal_placeholder(raw_obs, runtime)
+                with self._lock:
+                    self._last_request_control_step = int(loop_step)
+                    self._use_cached_once = True
+                return True
+
+            with self._lock:
+                self._latest_control_step = int(loop_step)
+                self._latest_task = task
+                self._latest_images = latest_images
+                if self._inflight is not None and not self._inflight.is_alive():
+                    logger.warning("Recovering stale ForeAct async request state")
+                    self._inflight = None
+                inflight = self._inflight is not None
+                should_request = (
+                    self._should_generate_subgoal(loop_step)
+                    and not inflight
+                    and loop_step > self._last_request_control_step
+                )
+                request_images = {cam: img.copy() for cam, img in latest_images.items()}
+            if should_request:
+                logger.info("Subgoal mode scheduling async ForeAct request at step %d", loop_step)
+                self._spawn_request(
+                    {"images": request_images},
+                    task,
+                    runtime,
+                    request_step=loop_step,
+                )
+            return False
+
         if not self._should_generate_subgoal(loop_step):
             return False
 
@@ -1296,6 +1344,26 @@ class SubgoalMode(ModeHandler):
             with self._lock:
                 self._initialized = True
         return updated
+
+    def _ensure_subgoal_placeholder(self, raw_obs: Dict[str, Any], runtime: RuntimeState) -> bool:
+        """Install a blank cached subgoal if the initial ForeAct request fails."""
+        with self._lock:
+            if self._cache:
+                return False
+            cameras = list(self._cameras)
+
+        raw_images = raw_obs.get("images") or {}
+        installed = False
+        for cam in cameras:
+            img = raw_images.get(cam)
+            if img is None:
+                continue
+            blank = np.zeros_like(img, dtype=np.uint8)
+            self._store_subgoal(cam, blank, runtime)
+            installed = True
+        if installed:
+            logger.info("Subgoal mode using blank placeholder until async ForeAct completes.")
+        return installed
 
     def attach_cached_subgoal_images(self, obs: Dict[str, Any]) -> None:
         with self._lock:
@@ -1413,10 +1481,12 @@ class SubgoalMode(ModeHandler):
                 # before_control_step(); just consume the cached result.
                 pass
         elif first_step and not cache_snapshot:
-            # Keep the initial blocking request behavior for step 0.
-            self._do_request(raw_obs, runtime.task, runtime)
-            with self._lock:
-                cache_snapshot = dict(self._cache)
+            # Direct-call fallback for code paths that bypass
+            # before_control_step(): async mode still waits for the first
+            # subgoal image once, then subsequent refreshes are backgrounded.
+            updated = self._do_request(raw_obs, runtime.task, runtime)
+            if not updated:
+                self._ensure_subgoal_placeholder(raw_obs, runtime)
 
         self.attach_cached_subgoal_images(obs)
         return obs

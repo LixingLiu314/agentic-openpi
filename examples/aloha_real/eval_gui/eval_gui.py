@@ -63,6 +63,7 @@ _POLICY_PRESETS = {
 
 _SUBTASK_PROMPT_MODES = {"subtask", "triple_cot"}
 _TRAJECTORY_SOURCE_MODES = {"traj", "triple_cot"}
+_TRAJECTORY_ARM_CONFIG_MODES = {"traj", "triple_cot"}
 _BLOCKING_ONLY_MODES = {"triple_cot"}
 _TRAJ_ANNOTATION_ARMS = {"both", "left", "right"}
 _TRAJ_MODE_DEFAULT_INACTIVE_PIXEL = (201.0, 666.0)
@@ -1372,7 +1373,7 @@ class EvalGUI(QtWidgets.QMainWindow):
     ):
         with self._runtime._lock:
             mode = self._canonical_mode(self._runtime.mode)
-        annotate_arm = self._traj_annotation_arm() if mode == "traj" else "both"
+        annotate_arm = self._traj_annotation_arm() if mode in _TRAJECTORY_ARM_CONFIG_MODES else "both"
         inactive_default = self._traj_inactive_default_pixel()
         req = _ManualTrajectoryRequest(
             image.copy(),
@@ -1506,7 +1507,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.rb_traj_manual.setEnabled(enabled)
         self.lbl_traj_source_note.setVisible(enabled)
         self.lbl_traj_source_note.setEnabled(enabled)
-        arm_config_enabled = enabled and mode == "traj"
+        arm_config_enabled = enabled and mode in _TRAJECTORY_ARM_CONFIG_MODES
         for widget in (
             self.lbl_traj_annotate,
             self.cb_traj_annotate_arm,
@@ -1518,7 +1519,8 @@ class EvalGUI(QtWidgets.QMainWindow):
             widget.setEnabled(arm_config_enabled)
         if mode == "triple_cot":
             self.lbl_traj_source_note.setText(
-                "Triple-CoT uses manual trajectory annotation; no VOLCENKEY/ARK_API_KEY is required."
+                "Triple-CoT uses manual trajectory annotation; choose which arm to annotate below. "
+                "No VOLCENKEY/ARK_API_KEY is required."
             )
         else:
             self.lbl_traj_source_note.setText(
@@ -1741,7 +1743,7 @@ def main() -> None:
         default="basic",
         choices=["basic", "traj", "subtask", "triple_cot", "triple-cot", "subgoal"],
     )
-    p.add_argument("--task", default="put the correct object into the hole")
+    p.add_argument("--task", default="put the banana on the plate")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--action_horizon", type=int, default=25)
