@@ -35,29 +35,29 @@ _MODE_DESCRIPTIONS = {
 
 _POLICY_PRESETS = {
     "basic": {
-        "label": "basic - obstacle baseline",
-        "config": "pi05_aloha_obstacle_baseline",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/obstacle/pi05_aloha_obstacle_baseline/obstacle_baseline/{step}",
+        "label": "basic - EAI baseline",
+        "config": "pi05_aloha_eai_baseline",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_baseline/eai_baseline/{step}",
     },
     "traj": {
-        "label": "traj - obstacle trajectory cot",
-        "config": "pi05_aloha_obstacle_traj",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/obstacle/pi05_aloha_obstacle_traj/obstacle_traj/{step}",
+        "label": "traj - EAI trajectory cot",
+        "config": "pi05_aloha_eai_traj",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_traj/eai_traj/{step}",
     },
     "subtask": {
-        "label": "subtask - obstacle labels",
-        "config": "pi05_aloha_obstacle_subtask",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/obstacle/pi05_aloha_obstacle_subtask/obstacle_subtask/{step}",
+        "label": "subtask - EAI labels",
+        "config": "pi05_aloha_eai_subtask",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_subtask/eai_subtask/{step}",
     },
     "triple_cot": {
-        "label": "triple-cot - obstacle all cot",
-        "config": "pi05_aloha_obstacle_all_cot",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/obstacle/pi05_aloha_obstacle_all_cot/obstacle_all_cot/{step}",
+        "label": "triple-cot - EAI all cot",
+        "config": "pi05_aloha_eai_all_cot",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_all_cot/eai_all_cot/{step}",
     },
     "subgoal": {
-        "label": "subgoal - obstacle base camera",
-        "config": "pi05_aloha_obstacle_subgoal",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/obstacle/pi05_aloha_obstacle_subgoal/obstacle_subgoal/{step}",
+        "label": "subgoal - EAI base camera",
+        "config": "pi05_aloha_eai_subgoal",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_subgoal/eai_subgoal/{step}",
     },
 }
 
@@ -914,7 +914,20 @@ class EvalGUI(QtWidgets.QMainWindow):
     @staticmethod
     def _checkpoint_task_markers(text: str) -> set[str]:
         lowered = text.lower()
-        return {name for name in ("banana", "cube", "eggplant") if name in lowered}
+        return {
+            name
+            for name in (
+                "banana",
+                "cube",
+                "eggplant",
+                "object",
+                "obstacle",
+                "eai",
+                "letter",
+                "stick",
+            )
+            if name in lowered
+        }
 
     @staticmethod
     def _local_checkpoint_exists(path: str) -> bool:
@@ -1743,7 +1756,7 @@ def main() -> None:
         default="basic",
         choices=["basic", "traj", "subtask", "triple_cot", "triple-cot", "subgoal"],
     )
-    p.add_argument("--task", default="put the banana on the plate")
+    p.add_argument("--task", default='Construct the letters "EAI" using sticks')
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--action_horizon", type=int, default=25)
