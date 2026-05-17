@@ -47,45 +47,25 @@ run_exp() {
     echo "------------------------------------------------------------"
 }
 
-# Step 1: sleep 3 hours before checking GPU availability
-echo "Sleeping 3 hours before checking GPU availability... (until $(date -d '+3 hours' '+%Y-%m-%d %H:%M:%S'))"
-sleep 10800
+# Wait for any currently running training to finish
+if pgrep -f "train_pytorch.py" > /dev/null 2>&1; then
+    echo "Waiting for current train_pytorch.py to finish..."
+    while pgrep -f "train_pytorch.py" > /dev/null 2>&1; do
+        sleep 30
+    done
+    echo "Current training finished. Starting subgoal sweep at experiment $START_FROM."
+else
+    echo "No training in progress. Starting subgoal sweep at experiment $START_FROM."
+fi
 
-# Step 2: poll every 5 minutes until all 8 GPUs each have >= 60 GB free
-FREE_THRESHOLD_MIB=61440   # 60 GiB in MiB
 
-check_gpu_free() {
-    # Returns 0 (success) if ALL 8 GPUs have >= FREE_THRESHOLD_MIB free
-    local counts
-    counts=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | wc -l)
-    if [[ "$counts" -lt 8 ]]; then
-        return 1  # fewer than 8 GPUs visible
-    fi
-    while IFS= read -r free_mib; do
-        if [[ "$free_mib" -lt "$FREE_THRESHOLD_MIB" ]]; then
-            return 1
-        fi
-    done < <(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null)
-    return 0
-}
-
-echo "Waiting for all 8 GPUs to have >= 60 GB free (checking every 5 minutes)..."
-while ! check_gpu_free; do
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] GPU memory not sufficient yet, waiting 5 min..."
-    nvidia-smi --query-gpu=index,memory.free --format=csv,noheader 2>/dev/null | sed 's/^/  GPU /'
-    sleep 300
-done
-echo "GPU memory condition met. Starting subgoal sweep at experiment $START_FROM."
-
-run_exp 1 "eai_subtask" \
-    pi05_aloha_eai_subtask \
+run_exp 1 "three_object_subtask" \
+    pi05_aloha_three_object_subtask \
     --debug_steps 5
 
-run_exp 2 "eai_subgoal" \
-    pi05_aloha_eai_subgoal \
+run_exp 2 "three_object_subgoal" \
+    pi05_aloha_three_object_subgoal \
     --debug_steps 5
-
-
 
 echo ""
 echo "All subgoal experiments finished: $(date '+%Y-%m-%d %H:%M:%S')"
