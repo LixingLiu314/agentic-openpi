@@ -2,15 +2,14 @@
 from __future__ import annotations
 
 import argparse
-import json
-import shutil
-import sys
-import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import as_completed
 from dataclasses import dataclass
+import json
 from pathlib import Path
+import shutil
+import time
 from typing import Any
-
 
 STATE_CANDIDATES = [
     "observations/qpos",
@@ -41,6 +40,7 @@ class Thresholds:
     min_frames: int
     min_joint_range: float
     min_cumulative_joint_movement: float
+    constant_joint_range_epsilon: float
     min_image_std: float
     image_sample_count: int
     active_arms: str
@@ -95,9 +95,11 @@ def iter_datasets(h5_file):
 def image_datasets(h5_file) -> list[tuple[str, Any]]:
     out = []
     for name, obj in iter_datasets(h5_file):
-        if any(name.startswith(prefix + "/") or name == prefix for prefix in IMAGE_PREFIXES):
-            if len(getattr(obj, "shape", ())) >= 3:
-                out.append((name, obj))
+        if (
+            any(name.startswith(prefix + "/") or name == prefix for prefix in IMAGE_PREFIXES)
+            and len(getattr(obj, "shape", ())) >= 3
+        ):
+            out.append((name, obj))
     return out
 
 
@@ -143,15 +145,53 @@ def is_active(metrics: dict[str, float] | None, thresholds: Thresholds) -> bool:
     )
 
 
+def arm_joint_dimensions(width: int) -> list[tuple[int, str, str, int]]:
+    dimensions = [(global_dim, "left", f"left_j{global_dim + 1}", global_dim) for global_dim in range(min(6, width))]
+    if width >= 13:
+        dimensions.extend(
+            (global_dim, "right", f"right_j{global_dim - 6}", global_dim - 7) for global_dim in range(7, 13)
+        )
+    return dimensions
+
+
+def constant_joint_warnings(np, array, motion_key: str | None, epsilon: float) -> list[dict[str, Any]]:
+    if array is None or array.ndim != 2 or array.shape[0] < 2:
+        return []
+    try:
+        data = array.astype("float64")
+    except (TypeError, ValueError):
+        return []
+
+    warnings = []
+    for dim, arm, joint, local_joint_index in arm_joint_dimensions(data.shape[1]):
+        values = data[:, dim]
+        if not np.isfinite(values).all():
+            continue
+        min_value = float(np.min(values))
+        max_value = float(np.max(values))
+        range_value = max_value - min_value
+        if range_value <= epsilon:
+            warnings.append(
+                {
+                    "type": "constant_joint",
+                    "motion_source": motion_key,
+                    "global_dim": dim,
+                    "arm": arm,
+                    "joint": joint,
+                    "local_joint_index": local_joint_index,
+                    "range": float(range_value),
+                    "value": float(values[0]),
+                }
+            )
+    return warnings
+
+
 def sampled_image_std(np, dataset, sample_count: int) -> dict[str, float]:
     length = int(dataset.shape[0])
     if length <= 0:
         return {"mean_std": 0.0, "min_std": 0.0, "max_std": 0.0}
     count = min(sample_count, length)
-    if count <= 1:
-        indices = [0]
-    else:
-        indices = sorted(set(int(round(i * (length - 1) / (count - 1))) for i in range(count)))
+    indices = [0] if count <= 1 else sorted({round(i * (length - 1) / (count - 1)) for i in range(count)})
     stds = []
     for idx in indices:
         frame = dataset[idx]
@@ -175,6 +215,7 @@ def analyze_one(path_text: str, root_text: str, thresholds_dict: dict[str, Any])
         "relative_path": rel_path,
         "bad": False,
         "reasons": [],
+        "warnings": [],
         "metrics": {},
     }
 
@@ -223,6 +264,10 @@ def analyze_one(path_text: str, root_text: str, thresholds_dict: dict[str, Any])
             right_active = is_active(right_metrics, thresholds)
             result["metrics"]["left_active"] = left_active
             result["metrics"]["right_active"] = right_active
+            result["warnings"].extend(
+                constant_joint_warnings(np, motion_source, motion_key, thresholds.constant_joint_range_epsilon)
+            )
+            result["metrics"]["num_constant_joints"] = len(result["warnings"])
 
             if thresholds.active_arms == "any":
                 no_motion = not (left_active or right_active)
@@ -278,7 +323,9 @@ def unique_destination(path: Path) -> Path:
     raise RuntimeError(f"Could not find a free destination for {path}")
 
 
-def remove_bad_files(root: Path, bad_results: list[dict[str, Any]], quarantine_dir: Path, delete: bool) -> list[dict[str, Any]]:
+def remove_bad_files(
+    root: Path, bad_results: list[dict[str, Any]], quarantine_dir: Path, *, delete: bool
+) -> list[dict[str, Any]]:
     actions = []
     for item in bad_results:
         src = Path(item["path"])
@@ -310,21 +357,55 @@ def parse_tasks(values: list[str] | None) -> set[str] | None:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Screen raw Aloha HDF5 episodes and optionally remove bad ones.")
-    parser.add_argument("--root", type=Path, default=Path("~/data/aloha_pipeline"), help="Root containing task directories with episode_*.hdf5 files.")
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=Path("~/data/aloha_pipeline"),
+        help="Root containing task directories with episode_*.hdf5 files.",
+    )
     parser.add_argument("--tasks", nargs="*", default=None, help="Optional task directory names to include.")
     parser.add_argument("--output", type=Path, default=Path("tools/data_quality/hdf5_screen_report.json"))
     parser.add_argument("--bad-list", type=Path, default=Path("tools/data_quality/bad_hdf5_episodes.txt"))
     parser.add_argument("--min-frames", type=int, default=20)
-    parser.add_argument("--min-joint-range", type=float, default=0.03, help="Minimum per-joint range in radians/meters to count an arm as active.")
-    parser.add_argument("--min-cumulative-joint-movement", type=float, default=0.15, help="Minimum cumulative 6D arm movement to count an arm as active.")
+    parser.add_argument(
+        "--min-joint-range",
+        type=float,
+        default=0.03,
+        help="Minimum per-joint range in radians/meters to count an arm as active.",
+    )
+    parser.add_argument(
+        "--min-cumulative-joint-movement",
+        type=float,
+        default=0.15,
+        help="Minimum cumulative 6D arm movement to count an arm as active.",
+    )
+    parser.add_argument(
+        "--constant-joint-range-epsilon",
+        type=float,
+        default=1e-12,
+        help="Warn when any left/right arm joint in the motion source has range less than or equal to this value.",
+    )
     parser.add_argument("--active-arms", choices=["any", "left", "right", "both"], default="any")
-    parser.add_argument("--check-images", action="store_true", help="Also sample image datasets for length and low-variance checks.")
+    parser.add_argument(
+        "--check-images", action="store_true", help="Also sample image datasets for length and low-variance checks."
+    )
     parser.add_argument("--image-sample-count", type=int, default=5)
     parser.add_argument("--min-image-std", type=float, default=1.0)
     parser.add_argument("--num-workers", type=int, default=1)
-    parser.add_argument("--apply", action="store_true", help="Actually remove bad episodes. Without this, only writes a report.")
-    parser.add_argument("--delete", action="store_true", help="Permanently delete bad files instead of moving to quarantine. Requires --apply.")
-    parser.add_argument("--quarantine-dir", type=Path, default=None, help="Where bad files are moved when --apply is used without --delete.")
+    parser.add_argument(
+        "--apply", action="store_true", help="Actually remove bad episodes. Without this, only writes a report."
+    )
+    parser.add_argument(
+        "--delete",
+        action="store_true",
+        help="Permanently delete bad files instead of moving to quarantine. Requires --apply.",
+    )
+    parser.add_argument(
+        "--quarantine-dir",
+        type=Path,
+        default=None,
+        help="Where bad files are moved when --apply is used without --delete.",
+    )
     return parser
 
 
@@ -341,6 +422,7 @@ def main() -> None:
         min_frames=args.min_frames,
         min_joint_range=args.min_joint_range,
         min_cumulative_joint_movement=args.min_cumulative_joint_movement,
+        constant_joint_range_epsilon=args.constant_joint_range_epsilon,
         min_image_std=args.min_image_std,
         image_sample_count=args.image_sample_count,
         active_arms=args.active_arms,
@@ -354,22 +436,31 @@ def main() -> None:
     else:
         results = []
         with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
-            futures = {
-                executor.submit(analyze_one, str(path), str(root), threshold_dict): path
-                for path in paths
-            }
+            futures = {executor.submit(analyze_one, str(path), str(root), threshold_dict): path for path in paths}
             for future in as_completed(futures):
                 results.append(future.result())
         results.sort(key=lambda item: item["relative_path"])
 
     bad = [item for item in results if item["bad"]]
+    warning_episodes = [item for item in results if item.get("warnings")]
+    num_warnings = sum(len(item.get("warnings", [])) for item in warning_episodes)
     report = {
         "root": str(root),
         "tasks": sorted(tasks) if tasks else None,
         "num_files": len(results),
         "num_bad": len(bad),
+        "num_warning_episodes": len(warning_episodes),
+        "num_warnings": num_warnings,
         "thresholds": threshold_dict,
         "bad_episodes": bad,
+        "warning_episodes": [
+            {
+                "path": item["path"],
+                "relative_path": item["relative_path"],
+                "warnings": item.get("warnings", []),
+            }
+            for item in warning_episodes
+        ],
         "all_episodes": results,
         "removal_actions": [],
     }
@@ -380,9 +471,13 @@ def main() -> None:
             quarantine_dir = root / "_deleted_bad_episodes_not_used"
         else:
             timestamp = time.strftime("%Y%m%d_%H%M%S")
-            quarantine_dir = args.quarantine_dir.expanduser().resolve() if args.quarantine_dir else root / "_removed_bad_episodes" / timestamp
+            quarantine_dir = (
+                args.quarantine_dir.expanduser().resolve()
+                if args.quarantine_dir
+                else root / "_removed_bad_episodes" / timestamp
+            )
             print(f"Moving bad HDF5 episodes to {quarantine_dir}")
-        report["removal_actions"] = remove_bad_files(root, bad, quarantine_dir, args.delete)
+        report["removal_actions"] = remove_bad_files(root, bad, quarantine_dir, delete=args.delete)
     else:
         print("Dry run only. Re-run with --apply to remove bad episodes.")
 
@@ -392,12 +487,24 @@ def main() -> None:
     args.bad_list.write_text("\n".join(item["path"] for item in bad) + ("\n" if bad else ""), encoding="utf-8")
 
     print(f"Bad episodes: {len(bad)} / {len(results)}")
+    print(f"Warnings: {num_warnings} constant arm joints in {len(warning_episodes)} episodes")
     print(f"Report: {args.output}")
     print(f"Bad list: {args.bad_list}")
     if bad:
         print("First bad episodes:")
         for item in bad[:20]:
             print(f"  {item['relative_path']}: {', '.join(item['reasons'])}")
+    if warning_episodes:
+        print("First warning episodes:")
+        for item in warning_episodes[:20]:
+            warnings = item.get("warnings", [])
+            preview = ", ".join(
+                f"{warning['joint']}(dim={warning['global_dim']}, value={warning['value']:.6g})"
+                for warning in warnings[:8]
+            )
+            if len(warnings) > 8:
+                preview += f", ... +{len(warnings) - 8} more"
+            print(f"  {item['relative_path']}: {preview}")
     if args.apply:
         print(f"Removal actions: {len(report['removal_actions'])}")
 

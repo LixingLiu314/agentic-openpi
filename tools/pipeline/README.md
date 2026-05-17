@@ -19,8 +19,9 @@ playground/Datasets/<dataset_name>/
 
 ```bash
 python tools/pipeline/run_aloha_hdf5_pipeline.py \
-  --tasks put_the_banana_on_the_plate \
-  --dataset-name aloha_banana_obstacle \
+  --raw-root ~/data/shape_hole_pipeline \
+  --tasks put_the_shapes_into_the_matching_holes \
+  --dataset-name aloha_shape \
   --overwrite
 ```
 
