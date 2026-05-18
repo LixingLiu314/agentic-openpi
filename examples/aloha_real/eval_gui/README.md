@@ -1,6 +1,7 @@
 # Aloha Eval GUI
 
-A unified PyQt5 evaluation pipeline for the four `pi05_aloha_banana_*` policies.
+A unified PyQt5 evaluation pipeline for the `aloha_shape` / three-object
+`pi05_aloha_three_object_*` policies.
 One window, one task field, one mode dropdown — the backend swaps the right
 pre-processing (subtask label / Doubao trajectory / ForeAct subgoal image) so
 the on-wire observation matches what the **training** repack transforms produced.
@@ -9,10 +10,11 @@ the on-wire observation matches what the **training** repack transforms produced
 
 | GUI Mode  | Training config                            | What the client adds to the obs                                              |
 |-----------|--------------------------------------------|------------------------------------------------------------------------------|
-| `basic`   | `pi05_aloha_banana`                        | nothing — `prompt = task`                                                    |
-| `traj`    | `pi05_aloha_banana_traj`                   | `prompt = "{task}, traj: Left: Go along ... Right: Go along ..."`            |
-| `subtask` | `pi05_aloha_banana_subtask_segment`        | `prompt = "{task}, subtask: {label}"`; label chosen from the subtask list    |
-| `subgoal` | `pi05_aloha_banana_subgoal_base`           | `subgoal_images = {"cam_high": HxWx3 uint8}` from ForeAct                    |
+| `basic`   | `pi05_aloha_three_object_baseline`         | nothing — `prompt = task`                                                    |
+| `traj`    | `pi05_aloha_three_object_traj`             | `prompt = "{task}, traj: Left: Go along ... Right: Go along ..."`            |
+| `subtask` | `pi05_aloha_three_object_subtask`          | `prompt = "{task}, subtask: {label}"`; label chosen from the subtask list    |
+| `triple_cot` | `pi05_aloha_three_object_all_cot`       | prompt includes task + subtask + trajectory; may include subgoal image       |
+| `subgoal` | `pi05_aloha_three_object_subgoal`          | `subgoal_images = {"cam_high": HxWx3 uint8}` from ForeAct                    |
 
 ### Policy checkpoint selection
 
@@ -21,10 +23,11 @@ the matching `policy.config`:
 
 | GUI Mode  | Auto-selected `policy.config`              |
 |-----------|--------------------------------------------|
-| `basic`   | `pi05_aloha_banana`                        |
-| `traj`    | `pi05_aloha_banana_traj`                   |
-| `subtask` | `pi05_aloha_banana_subtask_segment`        |
-| `subgoal` | `pi05_aloha_banana_subgoal_base`           |
+| `basic`   | `pi05_aloha_three_object_baseline`         |
+| `traj`    | `pi05_aloha_three_object_traj`             |
+| `subtask` | `pi05_aloha_three_object_subtask`          |
+| `triple_cot` | `pi05_aloha_three_object_all_cot`       |
+| `subgoal` | `pi05_aloha_three_object_subgoal`          |
 
 The checkpoint field is an editable dropdown. You can type a `policy.dir`, pick
 one from the dropdown, use the step spinbox to generate the default checkpoint
@@ -56,7 +59,7 @@ and then runs the **same** `coords_to_loc_tokens` regex used by
 `<locXXXX>` tokens. End-to-end the prompt becomes e.g.
 
 ```
-put banana in the green plate, traj: Left: Go along <loc0000><loc0554>.
+put the shapes into the matching holes, traj: Left: Go along <loc0000><loc0554>.
 Right: Go along <loc0980><loc0627>, <loc1000><loc0533>, close gripper, <loc0714><loc0271>
 ```
 
@@ -142,7 +145,7 @@ active key again counts as confirmation.
 
 ### Subtask labels (Mode 3)
 
-* Default key on init = **1**, with the canonical banana labels
+* Default key on init = **1**, with the canonical shape-hole labels
   pre-populated.
 * Labels are **editable** in-place (just type & Enter).
 * Click **Add** to append a new subtask field. Click **Remove** to remove the
@@ -177,7 +180,7 @@ missing video spans. File names include the selected checkpoint name and a
 timestamp, for example:
 
 ```
-test_video/banana_subtask_seg_lr5e5_5000_20260507_102100.mp4
+test_video/three_object_subtask_5000_20260507_102100.mp4
 ```
 
 Videos are encoded as H.264 MP4 with `yuv420p` pixels and `+faststart`, so they
@@ -186,8 +189,8 @@ can be opened directly in VS Code and browser-based players.
 Each run also writes an append-only VLA input log next to the video:
 
 ```
-test_video/banana_subtask_seg_lr5e5_5000_20260507_102100_log.jsonl
-test_video/banana_subtask_seg_lr5e5_5000_20260507_102100_step_00000_subgoal.jpg
+test_video/three_object_subtask_5000_20260507_102100_log.jsonl
+test_video/three_object_subtask_5000_20260507_102100_step_00000_subgoal.jpg
 ```
 
 The JSONL file has one entry per actual VLA server inference request. Each
@@ -230,7 +233,7 @@ only for hardware calibration/debugging.
 bash scripts/start_aloha_eval_gui.sh \
     --mode subtask \
     --host 127.0.0.1 --port 8000 \
-    --task "put banana in the green plate"
+    --task "put the shapes into the matching holes"
 ```
 
 ## Keyboard shortcuts

@@ -68,12 +68,13 @@ logger = logging.getLogger(__name__)
 #     3: "Move the cuboid on the hole",
 #     4: "Put the cuboid in the hole"
 # }
+DEFAULT_TASK_PROMPT = "put the shapes into the matching holes"
+
 DEFAULT_SUBTASK_LABELS: Dict[int, str] = {
-    1: "reach the sticks",
-    2: "grasp a stick",
-    3: "move the stick to the target letter position",
-    4: "release the stick",
-    5: "adjust the stick alignment",
+    1: "reach the target shape",
+    2: "grasp the target shape",
+    3: "move the shape to the matching hole",
+    4: "place the shape into the matching hole",
 }
 
 def to_chw_uint8(img_hwc_rgb: np.ndarray, h: int = 224, w: int = 224) -> np.ndarray:
@@ -89,7 +90,7 @@ class RuntimeState:
     """Mutable state shared between the GUI thread and the eval runner thread."""
 
     mode: str = "basic"                   # one of: basic | traj | subtask | triple_cot | subgoal
-    task: str = 'Construct the letters "EAI" using sticks'
+    task: str = DEFAULT_TASK_PROMPT
 
     # --- subtask config (editable from GUI / JSON file) ---------------- #
     subtask_labels: Dict[int, str] = field(

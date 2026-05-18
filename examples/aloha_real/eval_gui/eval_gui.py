@@ -43,29 +43,29 @@ _MODE_DESCRIPTIONS = {
 
 _POLICY_PRESETS = {
     "basic": {
-        "label": "basic - EAI baseline",
-        "config": "pi05_aloha_eai_baseline",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_baseline/eai_baseline/{step}",
+        "label": "basic - aloha_shape baseline",
+        "config": "pi05_aloha_three_object_baseline",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/three_object/pi05_aloha_three_object_baseline/three_object_baseline/{step}",
     },
     "traj": {
-        "label": "traj - EAI trajectory cot",
-        "config": "pi05_aloha_eai_traj",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_traj/eai_traj/{step}",
+        "label": "traj - aloha_shape trajectory cot",
+        "config": "pi05_aloha_three_object_traj",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/three_object/pi05_aloha_three_object_traj/three_object_traj/{step}",
     },
     "subtask": {
-        "label": "subtask - EAI labels",
-        "config": "pi05_aloha_eai_subtask",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_subtask/eai_subtask/{step}",
+        "label": "subtask - aloha_shape labels",
+        "config": "pi05_aloha_three_object_subtask",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/three_object/pi05_aloha_three_object_subtask/three_object_subtask/{step}",
     },
     "triple_cot": {
-        "label": "triple-cot - EAI all cot",
-        "config": "pi05_aloha_eai_all_cot",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_all_cot/eai_all_cot/{step}",
+        "label": "triple-cot - aloha_shape all cot",
+        "config": "pi05_aloha_three_object_all_cot",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/three_object/pi05_aloha_three_object_all_cot/three_object_all_cot/{step}",
     },
     "subgoal": {
-        "label": "subgoal - EAI base camera",
-        "config": "pi05_aloha_eai_subgoal",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_subgoal/eai_subgoal/{step}",
+        "label": "subgoal - aloha_shape base camera",
+        "config": "pi05_aloha_three_object_subgoal",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/three_object/pi05_aloha_three_object_subgoal/three_object_subgoal/{step}",
     },
 }
 
@@ -1055,13 +1055,19 @@ class EvalGUI(QtWidgets.QMainWindow):
     @staticmethod
     def _checkpoint_task_markers(text: str) -> set[str]:
         lowered = text.lower()
-        return {
+        markers = {
             name
             for name in (
+                "three_object",
+                "aloha_shape",
+                "matching_holes",
+                "matching holes",
+                "shape",
+                "aloha_object",
+                "correct_object",
                 "banana",
                 "cube",
                 "eggplant",
-                "object",
                 "obstacle",
                 "eai",
                 "letter",
@@ -1069,6 +1075,9 @@ class EvalGUI(QtWidgets.QMainWindow):
             )
             if name in lowered
         }
+        if markers & {"three_object", "aloha_shape", "matching_holes", "matching holes", "shape"}:
+            markers.update({"three_object", "aloha_shape", "matching_holes", "shape"})
+        return markers
 
     @staticmethod
     def _local_checkpoint_exists(path: str) -> bool:
@@ -2015,7 +2024,7 @@ def main() -> None:
         default="basic",
         choices=["basic", "traj", "subtask", "triple_cot", "triple-cot", "subgoal"],
     )
-    p.add_argument("--task", default='Construct the letters "EAI" using sticks')
+    p.add_argument("--task", default=_modes.DEFAULT_TASK_PROMPT)
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--action_horizon", type=int, default=25)
