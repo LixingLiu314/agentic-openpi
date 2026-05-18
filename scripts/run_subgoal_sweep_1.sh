@@ -58,17 +58,14 @@ else
     echo "No training in progress. Starting subgoal sweep at experiment $START_FROM."
 fi
 
-# ── Experiment 1: trajectory COT ────────────────────────────────
-run_exp 1 "object_baseline_accurategripper" \
-    pi05_aloha_object_baseline \
+
+run_exp 1 "three_object_subtask" \
+    pi05_aloha_three_object_subtask \
     --debug_steps 5
 
-# ── Experiment 2: subgoal base camera only ─────────────────────
-run_exp 2 "object_subgoal" \
-    pi05_aloha_object_subgoal  \
+run_exp 2 "three_object_subgoal" \
+    pi05_aloha_three_object_subgoal \
     --debug_steps 5
-
-
 
 echo ""
 echo "All subgoal experiments finished: $(date '+%Y-%m-%d %H:%M:%S')"

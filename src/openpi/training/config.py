@@ -1692,11 +1692,14 @@ _CONFIGS = [
         ),
         policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
     ),
-    # ── EAI letter construction task ──────────────────────────────────────────────
-    # Dataset: playground/Datasets/aloha_letter
-    #   - 200 episodes, task: Construct the letters "EAI" using sticks
-    # Symlink:
-    #   ln -sfn <project_root>/playground/Datasets/aloha_letter $HF_HOME/lerobot/lixing/aloha_eai
+    # ── EAI task (construct the letters "EAI" using sticks) ──────────────────────
+    # Dataset: Datasets/EAI/EAI_lerobot
+    #   - 197 episodes, aloha_piper robot, gripper binarized, videos AV1
+    #   - subtask and cam_high_subgoal already preprocessed in-place
+    #   - traj_cot: run scripts/step6_preprocess_traj_cot.py adapted for EAI
+    # Symlink: ln -sfn <project_root>/Datasets/EAI/EAI_lerobot $HF_HOME/lerobot/lixing/aloha_eai
+
+    # Baseline — task prompt only, no CoT signal.
     TrainConfig(
         name="pi05_aloha_eai_baseline",
         model=pi0_config.Pi0Config(pi05=True),
@@ -1739,6 +1742,7 @@ _CONFIGS = [
         ),
         policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
     ),
+    # Subtask — per-frame subtask label appended to prompt.
     TrainConfig(
         name="pi05_aloha_eai_subtask",
         model=pi0_config.Pi0Config(pi05=True),
@@ -1783,6 +1787,7 @@ _CONFIGS = [
         ),
         policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
     ),
+    # Traj — per-frame trajectory CoT (<loc> tokens, window=60) appended to prompt.
     TrainConfig(
         name="pi05_aloha_eai_traj",
         model=pi0_config.Pi0Config(pi05=True),
@@ -1827,6 +1832,7 @@ _CONFIGS = [
         ),
         policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
     ),
+    # Subgoal — subgoal image (cam_high, window=60) fed as extra visual input.
     TrainConfig(
         name="pi05_aloha_eai_subgoal",
         model=pi0_config.Pi0Config(pi05=True),
@@ -1873,11 +1879,244 @@ _CONFIGS = [
         ),
         policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
     ),
+    # All-CoT — subgoal image + subtask label + trajectory CoT.
     TrainConfig(
         name="pi05_aloha_eai_all_cot",
         model=pi0_config.Pi0Config(pi05=True),
         data=LeRobotAlohaWithSubgoalDataConfig(
             repo_id="lixing/aloha_eai",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            subgoal_camera_map=(("cam_high", "subgoal_base_0_rgb"),),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "subgoal_images": {
+                                "cam_high": "observation.images.cam_high_subgoal",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                            "subtask": "subtask",
+                            "traj_cot": "traj_cot",
+                        }
+                    ),
+                    _transforms.AppendSubtaskToPrompt(),
+                    _transforms.AppendTrajCotToPrompt(),
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=2.5e-5,
+            decay_steps=5_000,
+            decay_lr=2.5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
+    # ── Three-object (put_the_shapes_into_the_matching_holes) ────────────────
+    # Baseline — task prompt only, no CoT.
+    TrainConfig(
+        name="pi05_aloha_three_object_baseline",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaDataConfig(
+            repo_id="lixing/aloha_three_object",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                        }
+                    )
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=2.5e-5,
+            decay_steps=5_000,
+            decay_lr=2.5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
+    # Subtask — per-frame subtask label appended to prompt.
+    TrainConfig(
+        name="pi05_aloha_three_object_subtask",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaDataConfig(
+            repo_id="lixing/aloha_three_object",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                            "subtask": "subtask",
+                        }
+                    ),
+                    _transforms.AppendSubtaskToPrompt(),
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=2.5e-5,
+            decay_steps=5_000,
+            decay_lr=2.5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
+    # Traj — per-frame trajectory CoT (<loc> tokens, window=60) appended to prompt.
+    TrainConfig(
+        name="pi05_aloha_three_object_traj",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaDataConfig(
+            repo_id="lixing/aloha_three_object",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                            "traj_cot": "traj_cot",
+                        }
+                    ),
+                    _transforms.AppendTrajCotToPrompt(),
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=2.5e-5,
+            decay_steps=5_000,
+            decay_lr=2.5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
+    # Subgoal — subgoal image (cam_high, window=60) fed as extra visual input.
+    TrainConfig(
+        name="pi05_aloha_three_object_subgoal",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaWithSubgoalDataConfig(
+            repo_id="lixing/aloha_three_object",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            subgoal_camera_map=(("cam_high", "subgoal_base_0_rgb"),),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "subgoal_images": {
+                                "cam_high": "observation.images.cam_high_subgoal",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                        }
+                    )
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=2.5e-5,
+            decay_steps=5_000,
+            decay_lr=2.5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
+    # All-CoT — subgoal image + subtask label + trajectory CoT.
+    TrainConfig(
+        name="pi05_aloha_three_object_all_cot",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaWithSubgoalDataConfig(
+            repo_id="lixing/aloha_three_object",
             assets=AssetsConfig(
                 assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
                 asset_id="trossen",
