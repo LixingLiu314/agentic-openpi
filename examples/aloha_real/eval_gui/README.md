@@ -81,6 +81,47 @@ like a Doubao result and uses the same per-arm loc-token ordering. Press
 **Emergency Stop** to discard the annotation, pause inference, and queue the
 existing return-to-zero path.
 
+### Auto-suggest reference trajectories
+
+Trajectory Mode can pre-fill the annotation dialog with a reference trajectory
+retrieved from the offline training dataset. The runtime never scans raw frames.
+Instead, you build a cache once:
+
+```bash
+python tools/trajectory/build_trajectory_retrieval_cache.py \
+    --dataset-root /path/to/aloha_lerobot_dataset \
+    --overwrite
+```
+
+By default this writes:
+
+```
+/path/to/aloha_lerobot_dataset/trajectory_data/cam_high_traj_reference_cache.pt
+```
+
+The cache contains:
+
+* one normalized image embedding per `observation.images.cam_high` frame;
+* the matching `episode_index` and `frame_index`;
+* the GT trajectory text from the parquet `traj_cot` column, falling back to
+  `trajectory_data/cot_text_prompts.json` when that column is absent.
+
+At evaluation time, set either the GUI cache field or an environment variable:
+
+```bash
+export AGENTIC_OPENPI_TRAJ_RETRIEVAL_CACHE=/path/to/cam_high_traj_reference_cache.pt
+# or:
+export AGENTIC_OPENPI_TRAJ_RETRIEVAL_DATASET=/path/to/aloha_lerobot_dataset
+```
+
+When the trajectory dialog opens, the GUI encodes the current live `cam_high`
+frame once, computes cosine similarity against the cached tensor with PyTorch,
+and uses the Top-1 matched frame's GT trajectory as the default text. Press
+**Finish** to use it directly, or **Clear** to discard it and annotate a new
+trajectory. The dialog log includes the matched episode/frame, score, and
+search latency; the intended runtime path is comfortably below 1 second because
+all dataset embeddings are already resident in memory.
+
 ### Sub-modes (modes 2 / 3 / 4)
 
 A radio toggle in the GUI controls *how* external inputs (Doubao trajectory,
@@ -243,6 +284,7 @@ eval_runner.py       EvalRunner thread: env <-> ModeHandler <-> WebsocketPolicy
 modes.py             ModeHandler subclasses; build observation matching training
 foreact_client.py    msgpack-numpy WS client to server_foreact.py
 doubao_predictor.py  Volcengine Ark Vision client + SubtaskPredictor hook
+trajectory_retrieval.py  Offline cache builder + runtime Top-1 reference search
 ```
 
 The handlers reproduce — at inference time — the *post-repack* shape of

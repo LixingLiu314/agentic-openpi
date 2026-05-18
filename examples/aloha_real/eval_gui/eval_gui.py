@@ -14,11 +14,19 @@ import time
 from typing import Optional
 
 import numpy as np
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5 import QtCore
+from PyQt5 import QtGui
+from PyQt5 import QtWidgets
 
 from . import modes as _modes
-from .eval_runner import EvalRunner, RunnerConfig
-from .manual_trajectory import build_manual_prediction, pixel_to_loc_tokens
+from .eval_runner import EvalRunner
+from .eval_runner import RunnerConfig
+from .manual_trajectory import build_manual_prediction
+from .manual_trajectory import build_prediction_from_text
+from .manual_trajectory import pixel_to_loc_tokens
+from .manual_trajectory import trajectory_text_to_arm_items
+from .trajectory_retrieval import TrajectoryReferenceRetriever
+from .trajectory_retrieval import default_cache_path
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +78,8 @@ _TRAJ_MODE_DEFAULT_INACTIVE_PIXEL = (201.0, 666.0)
 
 _CHECKPOINT_HISTORY_LIMIT = 30
 _CHECKPOINT_HISTORY_ENV = "AGENTIC_OPENPI_EVAL_GUI_HISTORY"
+_TRAJ_RETRIEVAL_CACHE_ENV = "AGENTIC_OPENPI_TRAJ_RETRIEVAL_CACHE"
+_TRAJ_RETRIEVAL_DATASET_ENV = "AGENTIC_OPENPI_TRAJ_RETRIEVAL_DATASET"
 
 
 def _np_to_qpixmap(img_hwc_rgb: Optional[np.ndarray], target_w: int, target_h: int) -> QtGui.QPixmap:
@@ -97,6 +107,8 @@ class _ManualTrajectoryRequest:
         right_only: bool = False,
         default_left_pixel: Optional[tuple[float, float]] = None,
         default_right_pixel: Optional[tuple[float, float]] = None,
+        reference_prediction=None,
+        reference_metadata: Optional[dict] = None,
     ) -> None:
         self.image = image
         self.task = task
@@ -107,6 +119,8 @@ class _ManualTrajectoryRequest:
         self.left_only = self.annotate_arm == "left"
         self.default_left_pixel = default_left_pixel
         self.default_right_pixel = default_right_pixel
+        self.reference_prediction = reference_prediction
+        self.reference_metadata = dict(reference_metadata or {})
         self.done = threading.Event()
         self.prediction = None
         self.cancel_requested = False
@@ -184,6 +198,8 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         right_only: bool = False,
         default_left_pixel: Optional[tuple[float, float]] = None,
         default_right_pixel: Optional[tuple[float, float]] = None,
+        reference_prediction=None,
+        reference_metadata: Optional[dict] = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Manual Trajectory Annotation")
@@ -206,10 +222,24 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         self._prediction = None
         self._force_close = False
         self._aborted = False
-        if self._right_only and default_left_pixel is not None:
-            self._items["left"].append(self._default_position_token(default_left_pixel))
-        if self._left_only and default_right_pixel is not None:
-            self._items["right"].append(self._default_position_token(default_right_pixel))
+        self._updating_text = False
+        self._reference_prediction = reference_prediction
+        self._reference_metadata = dict(reference_metadata or {})
+        self._default_left_pixel = default_left_pixel
+        self._default_right_pixel = default_right_pixel
+        self._reference_text = (
+            reference_prediction.to_loc_token_text()
+            if reference_prediction is not None and not reference_prediction.is_empty()
+            else ""
+        )
+        if self._reference_text:
+            try:
+                parsed = trajectory_text_to_arm_items(self._reference_text)
+                self._items["left"].extend(parsed.get("left", []))
+                self._items["right"].extend(parsed.get("right", []))
+            except Exception as e:
+                logger.warning("Could not parse reference trajectory into dialog items: %s", e)
+        self._apply_inactive_defaults()
 
         root = QtWidgets.QVBoxLayout(self)
         self.lbl_task = QtWidgets.QLabel(f"Task: {task}")
@@ -220,6 +250,21 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         self.image_label.set_source_image(self._base_image)
         self.image_label.image_clicked.connect(self._on_image_clicked)
         root.addWidget(self.image_label, 1)
+
+        text_header = QtWidgets.QHBoxLayout()
+        text_header.addWidget(QtWidgets.QLabel("Trajectory text:"))
+        self.lbl_reference = QtWidgets.QLabel(self._reference_summary_text())
+        self.lbl_reference.setStyleSheet("color:#888;")
+        text_header.addWidget(self.lbl_reference, 1)
+        root.addLayout(text_header)
+
+        self.txt_trajectory = QtWidgets.QPlainTextEdit()
+        self.txt_trajectory.setMaximumHeight(88)
+        self.txt_trajectory.setPlaceholderText("Left: Go along <loc....><loc....>. Right: Go along ...")
+        self.txt_trajectory.textChanged.connect(self._on_trajectory_text_changed)
+        root.addWidget(self.txt_trajectory)
+        if self._reference_text:
+            self._set_trajectory_text(self._reference_text)
 
         btn_row = QtWidgets.QHBoxLayout()
         self.bg_arm = QtWidgets.QButtonGroup(self)
@@ -250,10 +295,14 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         self.btn_close.setToolTip("Shortcut: W")
         self.btn_close.clicked.connect(lambda: self._append_item("close gripper"))
         btn_row.addWidget(self.btn_close)
-        self.btn_undo = QtWidgets.QPushButton("Clear/Undo")
+        self.btn_undo = QtWidgets.QPushButton("Undo")
         self.btn_undo.setToolTip("Remove the most recent point or gripper action. Shortcut: Z")
         self.btn_undo.clicked.connect(self._undo_last)
         btn_row.addWidget(self.btn_undo)
+        self.btn_clear = QtWidgets.QPushButton("Clear")
+        self.btn_clear.setToolTip("Discard the current/reference trajectory text and points.")
+        self.btn_clear.clicked.connect(self._clear_all)
+        btn_row.addWidget(self.btn_clear)
         btn_row.addStretch(1)
         self.btn_abort = QtWidgets.QPushButton("Emergency Stop")
         self.btn_abort.setToolTip("Discard this annotation, pause inference, and queue return-to-zero.")
@@ -272,8 +321,7 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         self.lbl_sequence.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         root.addWidget(self.lbl_sequence)
         self._refresh_sequence()
-        if self._single_arm is not None:
-            self._refresh_preview()
+        self._refresh_preview()
 
     @property
     def prediction(self):
@@ -323,12 +371,53 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         self._force_close = True
         super().reject()
 
+    def _reference_summary_text(self) -> str:
+        if not self._reference_text:
+            return ""
+        ep = self._reference_metadata.get("episode_index")
+        frame = self._reference_metadata.get("frame_index")
+        score = self._reference_metadata.get("score")
+        search_ms = self._reference_metadata.get("search_ms")
+        parts = ["reference loaded"]
+        if ep is not None and frame is not None:
+            parts.append(f"episode {int(ep):06d} frame {int(frame)}")
+        if score is not None:
+            parts.append(f"score {float(score):.3f}")
+        if search_ms is not None:
+            parts.append(f"{float(search_ms):.1f} ms")
+        return " | ".join(parts)
+
     @staticmethod
     def _default_position_token(pixel: tuple[float, float]) -> str:
         x, y = pixel
         loc_x = max(0, min(int(round(float(x))), 1000))
         loc_y = max(0, min(int(round(float(y))), 1000))
         return f"<loc{loc_x:04d}><loc{loc_y:04d}>"
+
+    def _apply_inactive_defaults(self) -> None:
+        if self._right_only and self._default_left_pixel is not None and not self._items["left"]:
+            self._items["left"].append(self._default_position_token(self._default_left_pixel))
+        if self._left_only and self._default_right_pixel is not None and not self._items["right"]:
+            self._items["right"].append(self._default_position_token(self._default_right_pixel))
+
+    def _set_trajectory_text(self, text: str) -> None:
+        self._updating_text = True
+        try:
+            self.txt_trajectory.setPlainText(text)
+        finally:
+            self._updating_text = False
+
+    def _on_trajectory_text_changed(self) -> None:
+        if self._updating_text:
+            return
+        self._refresh_preview()
+
+    def _text_prediction(self):
+        text = self.txt_trajectory.toPlainText().strip()
+        if not text:
+            return None
+        pred = build_prediction_from_text(text)
+        return None if pred.is_empty() else pred
 
     def _arm_selectable(self, arm: str) -> bool:
         return self._single_arm is None or self._single_arm == arm
@@ -350,6 +439,7 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         arm = self._active_arm
         self._items[arm].append(item)
         self._history.append((arm, item))
+        self._refresh_text_from_items()
         self._refresh_preview()
         self._refresh_sequence()
 
@@ -361,10 +451,16 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
             self._items[arm].pop()
         elif item in self._items[arm]:
             self._items[arm].remove(item)
+        self._refresh_text_from_items()
         self._refresh_preview()
         self._refresh_sequence()
 
     def _finish(self) -> None:
+        text_pred = self._text_prediction()
+        if text_pred is not None:
+            self._prediction = text_pred
+            self.accept()
+            return
         if not self._items["left"] or not self._items["right"]:
             if self._single_arm is not None:
                 message = (
@@ -383,17 +479,39 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         self.accept()
 
     def _trajectory_text(self) -> str:
+        text_pred = self._text_prediction()
+        if text_pred is not None:
+            return text_pred.to_loc_token_text()
+        if not self._items["left"] and not self._items["right"]:
+            return ""
         return build_manual_prediction(self._items["left"], self._items["right"]).to_loc_token_text()
 
-    def _refresh_preview(self) -> None:
+    def _refresh_text_from_items(self) -> None:
         if not self._items["left"] and not self._items["right"]:
+            self._set_trajectory_text("")
+            return
+        self._set_trajectory_text(
+            build_manual_prediction(self._items["left"], self._items["right"]).to_loc_token_text()
+        )
+
+    def _clear_all(self) -> None:
+        self._items = {"left": [], "right": []}
+        self._history = []
+        self._apply_inactive_defaults()
+        self._set_trajectory_text("")
+        self._refresh_preview()
+        self._refresh_sequence()
+
+    def _refresh_preview(self) -> None:
+        traj_text = self._trajectory_text()
+        if not traj_text.strip():
             self.image_label.set_source_image(self._base_image)
             return
         try:
             from .trajectory_visualizer import render_trajectory_overlay
 
-            self.image_label.set_source_image(render_trajectory_overlay(self._base_image, self._trajectory_text()))
-        except Exception as e:                       # noqa: BLE001
+            self.image_label.set_source_image(render_trajectory_overlay(self._base_image, traj_text))
+        except Exception as e:
             logger.warning("Manual trajectory preview failed: %s", e)
             self.image_label.set_source_image(self._base_image)
 
@@ -433,6 +551,9 @@ class EvalGUI(QtWidgets.QMainWindow):
         self._step_interval = 60
         self._manual_traj_dialog: Optional[ManualTrajectoryDialog] = None
         self._manual_traj_request: Optional[_ManualTrajectoryRequest] = None
+        self._traj_retriever: Optional[TrajectoryReferenceRetriever] = None
+        self._traj_retriever_path = ""
+        self._traj_retriever_warned_paths: set[str] = set()
         self._checkpoint_history_path = self._checkpoint_history_file()
         self._checkpoint_history: dict[str, list[str]] = {key: [] for key in _POLICY_PRESETS}
         self._last_checkpoint_by_mode: dict[str, str] = {}
@@ -639,6 +760,26 @@ class EvalGUI(QtWidgets.QMainWindow):
         traj_arm_row.addWidget(self.sp_traj_default_y)
         traj_arm_row.addStretch(1)
         traj_source_layout.addLayout(traj_arm_row)
+
+        traj_ref_row = QtWidgets.QHBoxLayout()
+        self.cb_traj_reference = QtWidgets.QCheckBox("Auto-suggest reference")
+        self.cb_traj_reference.setChecked(True)
+        self.cb_traj_reference.setToolTip(
+            "Use a precomputed dataset image-embedding cache to pre-fill the trajectory dialog."
+        )
+        traj_ref_row.addWidget(self.cb_traj_reference)
+        traj_ref_row.addWidget(QtWidgets.QLabel("cache:"))
+        self.le_traj_reference_cache = QtWidgets.QLineEdit(self._default_traj_retrieval_cache_text())
+        self.le_traj_reference_cache.setPlaceholderText(
+            "$AGENTIC_OPENPI_TRAJ_RETRIEVAL_CACHE or <dataset>/trajectory_data/"
+            "cam_high_traj_reference_cache.pt"
+        )
+        self.le_traj_reference_cache.editingFinished.connect(self._invalidate_trajectory_retriever)
+        traj_ref_row.addWidget(self.le_traj_reference_cache, 1)
+        self.btn_browse_traj_reference_cache = QtWidgets.QPushButton("Browse...")
+        self.btn_browse_traj_reference_cache.clicked.connect(self._on_browse_traj_reference_cache)
+        traj_ref_row.addWidget(self.btn_browse_traj_reference_cache)
+        traj_source_layout.addLayout(traj_ref_row)
         left.addWidget(self.gb_traj_source)
 
         # Run buttons
@@ -1068,6 +1209,105 @@ class EvalGUI(QtWidgets.QMainWindow):
             return
         self.le_output_dir.setText(path)
 
+    @staticmethod
+    def _default_traj_retrieval_cache_text() -> str:
+        explicit = os.environ.get(_TRAJ_RETRIEVAL_CACHE_ENV, "").strip()
+        if explicit:
+            return explicit
+        dataset = os.environ.get(_TRAJ_RETRIEVAL_DATASET_ENV, "").strip()
+        if dataset:
+            return str(default_cache_path(dataset))
+        return ""
+
+    def _trajectory_retrieval_cache_path(self) -> Optional[pathlib.Path]:
+        text = self.le_traj_reference_cache.text().strip()
+        if not text:
+            return None
+        path = pathlib.Path(text).expanduser()
+        if not path.is_absolute():
+            path = _REPO_ROOT / path
+        return path
+
+    def _invalidate_trajectory_retriever(self) -> None:
+        self._traj_retriever = None
+        self._traj_retriever_path = ""
+
+    def _on_browse_traj_reference_cache(self) -> None:
+        current = self._trajectory_retrieval_cache_path()
+        start_dir = current.parent if current is not None and current.parent.exists() else _REPO_ROOT
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Select trajectory retrieval cache",
+            str(start_dir),
+            "PyTorch cache (*.pt *.pth);;All files (*)",
+        )
+        if not path:
+            return
+        self.le_traj_reference_cache.setText(path)
+        self._invalidate_trajectory_retriever()
+
+    def _prepare_trajectory_retriever(self, *, warn_missing: bool = True) -> Optional[TrajectoryReferenceRetriever]:
+        if getattr(self, "cb_traj_reference", None) is None or not self.cb_traj_reference.isChecked():
+            return None
+        path = self._trajectory_retrieval_cache_path()
+        if path is None:
+            return None
+        path_text = str(path)
+        if self._traj_retriever is not None and self._traj_retriever_path == path_text:
+            return self._traj_retriever
+        if not path.exists():
+            if warn_missing and path_text not in self._traj_retriever_warned_paths:
+                self._traj_retriever_warned_paths.add(path_text)
+                self._bridge.error.emit(
+                    "Trajectory reference cache not found. Build it with "
+                    f"tools/trajectory/build_trajectory_retrieval_cache.py: {path}"
+                )
+            self._traj_retriever = None
+            self._traj_retriever_path = ""
+            return None
+        try:
+            retriever = TrajectoryReferenceRetriever(path)
+        except Exception as e:
+            if path_text not in self._traj_retriever_warned_paths:
+                self._traj_retriever_warned_paths.add(path_text)
+                self._bridge.error.emit(f"Could not load trajectory reference cache {path}: {e}")
+            self._traj_retriever = None
+            self._traj_retriever_path = ""
+            return None
+        self._traj_retriever = retriever
+        self._traj_retriever_path = path_text
+        self._bridge.info.emit(f"Loaded trajectory reference cache: {retriever.count} frames from {path}")
+        return retriever
+
+    def _suggest_reference_trajectory(self, image: np.ndarray):
+        retriever = self._prepare_trajectory_retriever(warn_missing=True)
+        if retriever is None:
+            return None, {}
+        try:
+            result = retriever.suggest(image)
+        except Exception as e:
+            logger.warning("Trajectory reference retrieval failed: %s", e)
+            self._bridge.error.emit(f"Trajectory reference retrieval failed: {e}")
+            return None, {}
+        if result is None:
+            return None, {}
+        pred = build_prediction_from_text(result.trajectory_text)
+        if pred.is_empty():
+            return None, {}
+        metadata = {
+            "episode_index": result.episode_index,
+            "frame_index": result.frame_index,
+            "score": result.score,
+            "search_ms": result.search_ms,
+            "cache_path": result.cache_path,
+        }
+        self._bridge.info.emit(
+            "Reference trajectory suggested from "
+            f"episode {result.episode_index:06d} frame {result.frame_index} "
+            f"(score={result.score:.3f}, search={result.search_ms:.1f} ms)."
+        )
+        return pred, metadata
+
     def _selected_output_dir(self) -> Optional[pathlib.Path]:
         text = self.le_output_dir.text().strip()
         if not text:
@@ -1388,12 +1628,15 @@ class EvalGUI(QtWidgets.QMainWindow):
             mode = self._canonical_mode(self._runtime.mode)
         annotate_arm = self._traj_annotation_arm() if mode in _TRAJECTORY_ARM_CONFIG_MODES else "both"
         inactive_default = self._traj_inactive_default_pixel()
+        reference_prediction, reference_metadata = self._suggest_reference_trajectory(image)
         req = _ManualTrajectoryRequest(
             image.copy(),
             task,
             annotate_arm=annotate_arm,
             default_left_pixel=inactive_default if annotate_arm == "right" else None,
             default_right_pixel=inactive_default if annotate_arm == "left" else None,
+            reference_prediction=reference_prediction,
+            reference_metadata=reference_metadata,
         )
         self._bridge.manual_trajectory.emit(req)
         if request_started is not None:
@@ -1421,6 +1664,8 @@ class EvalGUI(QtWidgets.QMainWindow):
             annotate_arm=req.annotate_arm,
             default_left_pixel=req.default_left_pixel,
             default_right_pixel=req.default_right_pixel,
+            reference_prediction=req.reference_prediction,
+            reference_metadata=req.reference_metadata,
         )
         self._manual_traj_request = req
         self._manual_traj_dialog = dialog
@@ -1438,6 +1683,18 @@ class EvalGUI(QtWidgets.QMainWindow):
             )
         else:
             self._log_info("Manual trajectory annotation requested.")
+        if req.reference_prediction is not None and not req.reference_prediction.is_empty():
+            meta = req.reference_metadata
+            ep = meta.get("episode_index")
+            frame = meta.get("frame_index")
+            score = meta.get("score")
+            search_ms = meta.get("search_ms")
+            detail = f"episode={ep}, frame={frame}"
+            if score is not None:
+                detail += f", score={float(score):.3f}"
+            if search_ms is not None:
+                detail += f", search={float(search_ms):.1f} ms"
+            self._log_info(f"Reference trajectory pre-filled ({detail}).")
         try:
             result = dialog.exec_()
             if req.cancel_requested:
@@ -1582,6 +1839,8 @@ class EvalGUI(QtWidgets.QMainWindow):
     def _on_start(self) -> None:
         if not self._configure_video_recording():
             return
+        if self._runtime.mode in _TRAJECTORY_SOURCE_MODES:
+            self._prepare_trajectory_retriever(warn_missing=True)
         if self._runner is None:
             self._on_connect()
         if self._runner is not None:

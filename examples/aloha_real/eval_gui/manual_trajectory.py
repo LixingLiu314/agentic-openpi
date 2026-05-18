@@ -1,10 +1,22 @@
 """Helpers for human-in-the-loop trajectory annotation."""
 from __future__ import annotations
 
+from collections.abc import Iterable
+import re
 import time
-from typing import Iterable
 
-from .doubao_predictor import TrajectoryPrediction, format_traj_string
+from .doubao_predictor import TrajectoryPrediction
+from .doubao_predictor import coords_to_loc_tokens
+from .doubao_predictor import format_traj_string
+
+_BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_LOC_PAIR_RE = re.compile(r"<loc\d{4}><loc\d{4}>", re.IGNORECASE)
+_COORD_RE = re.compile(r"\(\d+,\s*\d+\)")
+_GRIPPER_RE = re.compile(r"\b(?:close gripper|open gripper)\b", re.IGNORECASE)
+_ITEM_RE = re.compile(
+    r"<loc\d{4}><loc\d{4}>|\(\d+,\s*\d+\)|\b(?:close gripper|open gripper)\b",
+    re.IGNORECASE,
+)
 
 
 def pixel_to_loc_tokens(x: float, y: float, image_width: int, image_height: int) -> str:
@@ -37,3 +49,64 @@ def build_manual_prediction(
         loc_token_text=text,
         timestamp=time.time() if timestamp is None else float(timestamp),
     )
+
+
+def normalize_trajectory_text(text: str) -> str:
+    """Return prompt-ready trajectory text with coords converted to loc tokens."""
+    text = _BR_RE.sub(" ", str(text or "").strip())
+    text = coords_to_loc_tokens(text)
+    return " ".join(text.split())
+
+
+def build_prediction_from_text(
+    text: str,
+    *,
+    timestamp: float | None = None,
+) -> TrajectoryPrediction:
+    """Build a trajectory prediction from an editable/reference text field."""
+    loc_text = normalize_trajectory_text(text)
+    return TrajectoryPrediction(
+        raw_cot=str(text or "").strip(),
+        loc_token_text=loc_text,
+        timestamp=time.time() if timestamp is None else float(timestamp),
+    )
+
+
+def trajectory_text_to_arm_items(text: str) -> dict[str, list[str]]:
+    """Best-effort parse of canonical Left/Right trajectory text into UI items."""
+    normalized = normalize_trajectory_text(text)
+    return {
+        "left": _parse_items(_segment_for_arm(normalized, "left")),
+        "right": _parse_items(_segment_for_arm(normalized, "right")),
+    }
+
+
+def _segment_for_arm(text: str, arm: str) -> str:
+    lower = text.lower()
+    left_idx = lower.find("left:")
+    right_idx = lower.find("right:")
+    if arm == "left":
+        if left_idx < 0:
+            return ""
+        end = right_idx if right_idx > left_idx else len(text)
+        return text[left_idx + len("left:") : end]
+    if right_idx < 0:
+        return ""
+    return text[right_idx + len("right:") :]
+
+
+def _parse_items(segment: str) -> list[str]:
+    items = []
+    for match in _ITEM_RE.finditer(segment or ""):
+        item = match.group(0).strip()
+        if not item:
+            continue
+        if _LOC_PAIR_RE.fullmatch(item):
+            items.append(item)
+        elif _COORD_RE.fullmatch(item):
+            items.append(coords_to_loc_tokens(item))
+        else:
+            grip = _GRIPPER_RE.search(item)
+            if grip:
+                items.append(grip.group(0).lower())
+    return items
