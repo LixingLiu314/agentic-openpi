@@ -185,3 +185,7 @@ aloha_merged_banana_cube/
 traj_data/
 playground/
 archive_video/
+node_modules/
+
+package.json
+package-lock.json

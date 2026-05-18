@@ -38,7 +38,7 @@ _MODE_DESCRIPTIONS = {
     "traj":    "Add Trajectory — manual L/R waypoint annotation by default.",
     "subtask": "Add Subtasks — keys 1-8 override the subtask label.",
     "triple_cot": "Triple-CoT — semi-block task + live subtask + trajectory prompt.",
-    "subgoal": "Add Subgoal Images — ForeAct generates cam_high subgoal.",
+    "subgoal": "Add Subgoal Images — ForeAct or GPT generates cam_high subgoal.",
 }
 
 _POLICY_PRESETS = {
@@ -204,6 +204,7 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.setWindowTitle("Manual Trajectory Annotation")
         self.setModal(True)
+        self.setFocusPolicy(QtCore.Qt.StrongFocus)
         self.resize(980, 760)
 
         arr = np.asarray(image)
@@ -223,6 +224,8 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         self._force_close = False
         self._aborted = False
         self._updating_text = False
+        self._keyboard_filter_installed = False
+        self._shortcuts: list[QtWidgets.QShortcut] = []
         self._reference_prediction = reference_prediction
         self._reference_metadata = dict(reference_metadata or {})
         self._default_left_pixel = default_left_pixel
@@ -260,7 +263,10 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
 
         self.txt_trajectory = QtWidgets.QPlainTextEdit()
         self.txt_trajectory.setMaximumHeight(88)
+        self.txt_trajectory.setReadOnly(True)
+        self.txt_trajectory.setFocusPolicy(QtCore.Qt.NoFocus)
         self.txt_trajectory.setPlaceholderText("Left: Go along <loc....><loc....>. Right: Go along ...")
+        self.txt_trajectory.setToolTip("Read-only trajectory preview. Use image clicks and buttons to annotate.")
         self.txt_trajectory.textChanged.connect(self._on_trajectory_text_changed)
         root.addWidget(self.txt_trajectory)
         if self._reference_text:
@@ -320,6 +326,7 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
         self.lbl_sequence.setWordWrap(True)
         self.lbl_sequence.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         root.addWidget(self.lbl_sequence)
+        self._install_keyboard_shortcuts()
         self._refresh_sequence()
         self._refresh_preview()
 
@@ -337,35 +344,116 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
             return
         QtWidgets.QApplication.beep()
 
+    def done(self, result: int) -> None:
+        self._uninstall_keyboard_filter()
+        super().done(result)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._install_keyboard_filter()
+        QtCore.QTimer.singleShot(0, self._activate_keyboard_focus)
+        QtCore.QTimer.singleShot(80, self._activate_keyboard_focus)
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        self._uninstall_keyboard_filter()
+        super().hideEvent(event)
+
     def closeEvent(self, event) -> None:  # noqa: N802
         if self.result() == QtWidgets.QDialog.Accepted or self._force_close:
+            self._uninstall_keyboard_filter()
             super().closeEvent(event)
             return
         event.ignore()
         QtWidgets.QApplication.beep()
 
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if (
+            self.isVisible()
+            and event.type() == QtCore.QEvent.KeyPress
+            and self._handle_shortcut_key(event.key())
+        ):
+            event.accept()
+            return True
+        return super().eventFilter(obj, event)
+
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:  # noqa: N802
-        key = event.key()
-        if key == QtCore.Qt.Key_Q:
-            self.btn_open.click()
-        elif key == QtCore.Qt.Key_W:
-            self.btn_close.click()
-        elif key == QtCore.Qt.Key_A and self._arm_selectable("left"):
-            self.btn_left.click()
-        elif key == QtCore.Qt.Key_D and self._arm_selectable("right"):
-            self.btn_right.click()
-        elif key == QtCore.Qt.Key_Z:
-            self.btn_undo.click()
-        else:
-            super().keyPressEvent(event)
+        if self._handle_shortcut_key(event.key()):
+            event.accept()
             return
-        event.accept()
+        super().keyPressEvent(event)
+
+    def _install_keyboard_shortcuts(self) -> None:
+        def add_shortcut(sequence: str, callback) -> None:
+            shortcut = QtWidgets.QShortcut(QtGui.QKeySequence(sequence), self)
+            shortcut.setContext(QtCore.Qt.ApplicationShortcut)
+            shortcut.activated.connect(callback)
+            self._shortcuts.append(shortcut)
+
+        add_shortcut("Q", lambda: self._click_button(self.btn_open))
+        add_shortcut("W", lambda: self._click_button(self.btn_close))
+        add_shortcut("A", lambda: self._select_arm_from_shortcut("left"))
+        add_shortcut("D", lambda: self._select_arm_from_shortcut("right"))
+        add_shortcut("Z", lambda: self._click_button(self.btn_undo))
+
+    def _install_keyboard_filter(self) -> None:
+        if self._keyboard_filter_installed:
+            return
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        app.installEventFilter(self)
+        self._keyboard_filter_installed = True
+
+    def _uninstall_keyboard_filter(self) -> None:
+        if not self._keyboard_filter_installed:
+            return
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+        self._keyboard_filter_installed = False
+
+    def _activate_keyboard_focus(self) -> None:
+        if not self.isVisible():
+            return
+        self.raise_()
+        self.activateWindow()
+        self.setFocus(QtCore.Qt.ActiveWindowFocusReason)
+
+    @staticmethod
+    def _click_button(button: QtWidgets.QPushButton) -> None:
+        if button.isVisible() and button.isEnabled():
+            button.click()
+
+    def _select_arm_from_shortcut(self, arm: str) -> None:
+        if not self._arm_selectable(arm):
+            return
+        self._click_button(self.btn_left if arm == "left" else self.btn_right)
+
+    def _handle_shortcut_key(self, key: int) -> bool:
+        if key == QtCore.Qt.Key_Q:
+            self._click_button(self.btn_open)
+            return True
+        if key == QtCore.Qt.Key_W:
+            self._click_button(self.btn_close)
+            return True
+        if key == QtCore.Qt.Key_A:
+            self._select_arm_from_shortcut("left")
+            return True
+        if key == QtCore.Qt.Key_D:
+            self._select_arm_from_shortcut("right")
+            return True
+        if key == QtCore.Qt.Key_Z:
+            self._click_button(self.btn_undo)
+            return True
+        return False
 
     def cancel_from_runner(self) -> None:
+        self._uninstall_keyboard_filter()
         self._force_close = True
         super().reject()
 
     def _abort(self) -> None:
+        self._uninstall_keyboard_filter()
         self._prediction = None
         self._aborted = True
         self._force_close = True
@@ -782,6 +870,51 @@ class EvalGUI(QtWidgets.QMainWindow):
         traj_source_layout.addLayout(traj_ref_row)
         left.addWidget(self.gb_traj_source)
 
+        # Subgoal source selection (Mode 4)
+        self.gb_subgoal_source = QtWidgets.QGroupBox("Subgoal source (Mode 4)")
+        subgoal_source_layout = QtWidgets.QVBoxLayout(self.gb_subgoal_source)
+        subgoal_src_row = QtWidgets.QHBoxLayout()
+        subgoal_src_row.addWidget(QtWidgets.QLabel("Source:"))
+        self.bg_subgoal_source = QtWidgets.QButtonGroup(self)
+        self.rb_subgoal_foreact = QtWidgets.QRadioButton("ForeAct Server")
+        self.rb_subgoal_foreact.setChecked(True)
+        self.rb_subgoal_gpt = QtWidgets.QRadioButton("GPT Generation")
+        self.bg_subgoal_source.addButton(self.rb_subgoal_foreact)
+        self.bg_subgoal_source.addButton(self.rb_subgoal_gpt)
+        self.rb_subgoal_gpt.toggled.connect(self._on_subgoal_source_changed)
+        subgoal_src_row.addWidget(self.rb_subgoal_foreact)
+        subgoal_src_row.addWidget(self.rb_subgoal_gpt)
+        subgoal_src_row.addStretch(1)
+        subgoal_source_layout.addLayout(subgoal_src_row)
+
+        gpt_key_row = QtWidgets.QHBoxLayout()
+        gpt_key_row.addWidget(QtWidgets.QLabel("GPT API Key:"))
+        self.le_gpt_api_key = QtWidgets.QLineEdit()
+        self.le_gpt_api_key.setEchoMode(QtWidgets.QLineEdit.Password)
+        self.le_gpt_api_key.setPlaceholderText("sk-xxxxx (or set GPT_SUBGOAL_API_KEY env)")
+        env_key = os.environ.get("GPT_SUBGOAL_API_KEY", "")
+        if env_key:
+            self.le_gpt_api_key.setText(env_key)
+        gpt_key_row.addWidget(self.le_gpt_api_key, 1)
+        subgoal_source_layout.addLayout(gpt_key_row)
+
+        gpt_prompt_row = QtWidgets.QHBoxLayout()
+        gpt_prompt_row.addWidget(QtWidgets.QLabel("GPT Prompt:"))
+        self.le_gpt_prompt = QtWidgets.QLineEdit()
+        self.le_gpt_prompt.setPlaceholderText(
+            "Custom prompt (leave empty for default). Use {task} as placeholder."
+        )
+        gpt_prompt_row.addWidget(self.le_gpt_prompt, 1)
+        subgoal_source_layout.addLayout(gpt_prompt_row)
+
+        self.lbl_subgoal_source_note = QtWidgets.QLabel(
+            "ForeAct uses the configured host/port above. "
+            "GPT requires a valid API key."
+        )
+        self.lbl_subgoal_source_note.setStyleSheet("color:#888;")
+        subgoal_source_layout.addWidget(self.lbl_subgoal_source_note)
+        left.addWidget(self.gb_subgoal_source)
+
         # Run buttons
         btn_row = QtWidgets.QHBoxLayout()
         self.btn_start = QtWidgets.QPushButton("▶ Start")
@@ -922,6 +1055,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         self._refresh_policy_fields_for_mode(self._runtime.mode, prefer_history=True)
         self._sync_execution_controls_for_mode(self._runtime.mode)
         self._update_traj_source_controls()
+        self._update_subgoal_source_controls()
 
     # ------------------------------------------------------------------ #
     # Logging
@@ -1571,6 +1705,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         self._sync_execution_controls_for_mode(mode)
         self._refresh_policy_fields_for_mode(mode, prefer_history=True)
         self._update_traj_source_controls()
+        self._update_subgoal_source_controls()
         # Sensible default step interval per mode.
         defaults = {"traj": 60, "subgoal": 60, "subtask": 60, "triple_cot": 60}
         if mode in defaults:
@@ -1604,9 +1739,31 @@ class EvalGUI(QtWidgets.QMainWindow):
             kwargs["manual_traj_override"] = self._manual_traj_override_enabled()
         elif mode == "subgoal":
             kwargs["subgoal_step_interval"] = n
+            if self._subgoal_use_gpt():
+                kwargs["foreact_client"] = self._build_gpt_subgoal_client()
         elif mode == "subtask":
             kwargs["subtask_step_interval"] = n
         return _modes.make_handler(mode, **kwargs)
+
+    def _subgoal_use_gpt(self) -> bool:
+        return bool(getattr(self, "rb_subgoal_gpt", None) and self.rb_subgoal_gpt.isChecked())
+
+    def _build_gpt_subgoal_client(self):
+        from .gpt_subgoal_client import GptSubgoalClient
+
+        api_key = self.le_gpt_api_key.text().strip()
+        if not api_key:
+            api_key = os.environ.get("GPT_SUBGOAL_API_KEY", "")
+        if not api_key:
+            raise ValueError(
+                "GPT subgoal generation requires an API key. "
+                "Set it in the GUI or via GPT_SUBGOAL_API_KEY env variable."
+            )
+        custom_prompt = self.le_gpt_prompt.text().strip() or None
+        client = GptSubgoalClient(api_key=api_key)
+        if custom_prompt:
+            client._custom_prompt = custom_prompt
+        return client
 
     def _manual_traj_override_enabled(self) -> bool:
         return bool(getattr(self, "rb_traj_manual", None) and self.rb_traj_manual.isChecked())
@@ -1805,6 +1962,30 @@ class EvalGUI(QtWidgets.QMainWindow):
             self.lbl_traj_source_note.setText(
                 "Trajectory annotation uses the manual GUI; choose which arm to annotate below."
             )
+
+    def _update_subgoal_source_controls(self) -> None:
+        mode = self._canonical_mode(self._runtime.mode)
+        visible = mode == "subgoal"
+        self.gb_subgoal_source.setVisible(visible)
+        self.gb_subgoal_source.setEnabled(visible)
+        if visible:
+            gpt_selected = self.rb_subgoal_gpt.isChecked()
+            self.le_gpt_api_key.setEnabled(gpt_selected)
+            self.le_gpt_prompt.setEnabled(gpt_selected)
+
+    def _on_subgoal_source_changed(self, gpt_selected: bool) -> None:
+        self.le_gpt_api_key.setEnabled(gpt_selected)
+        self.le_gpt_prompt.setEnabled(gpt_selected)
+        source = "GPT Generation" if gpt_selected else "ForeAct Server"
+        self._log_info(f"Subgoal source -> {source}")
+        if self._runner is not None:
+            try:
+                handler = self._build_handler(self._runtime.mode)
+            except Exception as e:
+                self._log_error(f"Subgoal source switch failed: {e}")
+                return
+            self._handler = handler
+            self._runner.set_handler(handler)
 
     def _on_interval_changed(self, n: int) -> None:
         self._step_interval = int(n)

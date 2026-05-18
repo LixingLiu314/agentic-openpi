@@ -71,10 +71,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_TASK_PROMPT = "put the shapes into the matching holes"
 
 DEFAULT_SUBTASK_LABELS: Dict[int, str] = {
-    1: "reach the target shape",
-    2: "grasp the target shape",
-    3: "move the shape to the matching hole",
-    4: "place the shape into the matching hole",
+    1: "put the cylinder into the left hole",
+    2: "put the cube into the middle hole",
+    3: "put the hexagonal prism into the right hole",
 }
 
 def to_chw_uint8(img_hwc_rgb: np.ndarray, h: int = 224, w: int = 224) -> np.ndarray:
