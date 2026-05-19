@@ -57,3 +57,31 @@ class BridgeInputs(transforms.DataTransformFn):
             inputs["prompt"] = data["prompt"]
 
         return inputs
+
+
+@dataclasses.dataclass(frozen=True)
+class BridgeWithSubgoalInputs(BridgeInputs):
+    """Bridge inputs with an extra future-GT subgoal image.
+
+    Expects ``subgoal_images`` from the repack transform, with ``image_0``
+    pointing to the aligned future-GT subgoal frame. The extra image is injected
+    under ``subgoal_base_0_rgb`` so the VLM sees it as an additional visual
+    context frame.
+    """
+
+    subgoal_source_key: str = "image_0"
+    subgoal_model_key: str = "subgoal_base_0_rgb"
+
+    def __call__(self, data: dict) -> dict:
+        subgoal_images = data.pop("subgoal_images", None)
+        result = super().__call__(data)
+
+        if subgoal_images is None or self.subgoal_source_key not in subgoal_images:
+            available = () if subgoal_images is None else tuple(subgoal_images)
+            raise ValueError(
+                f"Missing subgoal image '{self.subgoal_source_key}' in subgoal_images; available keys: {available}"
+            )
+
+        result["image"][self.subgoal_model_key] = _parse_image(subgoal_images[self.subgoal_source_key])
+        result["image_mask"][self.subgoal_model_key] = np.True_
+        return result
