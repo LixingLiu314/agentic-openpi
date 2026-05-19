@@ -76,6 +76,12 @@ For normal use, call the end-to-end pipeline instead of this script directly:
 
 ```bash
 python tools/pipeline/run_aloha_hdf5_pipeline.py \
+  --tasks custom \
+  --dataset-name aloha_custom \
+  --overwrite
+```
+```bash
+python tools/pipeline/run_aloha_hdf5_pipeline.py \
   --tasks <task_name1> <task_name2> \
   --dataset-name <dataset_name> \
   --overwrite

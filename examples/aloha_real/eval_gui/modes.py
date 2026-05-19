@@ -955,6 +955,9 @@ class TripleCotMode(TrajectoryMode):
         if self._subgoal_handler is None or not self._should_generate_foreact(loop_step):
             return False
 
+        if hasattr(self._subgoal_handler._client, "set_current_step"):
+            self._subgoal_handler._client.set_current_step(loop_step)
+
         raw_images = raw_obs.get("images") or {}
         with self._subgoal_handler._lock:
             cameras = list(self._subgoal_handler._cameras)
@@ -1215,6 +1218,11 @@ class SubgoalMode(ModeHandler):
             self._latest_images = {}
             self._last_request_control_step = -1
             self._request_generation += 1
+        if hasattr(self._client, "reset"):
+            try:
+                self._client.reset()
+            except Exception:
+                pass
 
     def set_blocking(self, blocking: bool) -> None:
         self._blocking = bool(blocking)
@@ -1236,6 +1244,9 @@ class SubgoalMode(ModeHandler):
         loop_step: int,
         cancel_check: Optional[Callable[[], bool]] = None,
     ) -> bool:
+        if hasattr(self._client, "set_current_step"):
+            self._client.set_current_step(loop_step)
+
         raw_images = raw_obs.get("images") or {}
         latest_images = {
             cam: raw_images[cam].copy()

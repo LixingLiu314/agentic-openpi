@@ -290,6 +290,7 @@ class _MultiCameraVideoRecorder:
         self._stopped = False
         self._dropped: Dict[str, int] = {name: 0 for name in self._camera_keys}
         self._sampler_error = ""
+        self._frame_count = 0
 
     def start(self) -> None:
         with self._lock:
@@ -350,6 +351,10 @@ class _MultiCameraVideoRecorder:
     def sampler_error(self) -> str:
         return self._sampler_error
 
+    @property
+    def video_frame_count(self) -> int:
+        return self._frame_count
+
     def _run(self) -> None:
         period = 1.0 / self._fps
         next_tick = time.monotonic()
@@ -371,6 +376,8 @@ class _MultiCameraVideoRecorder:
 
             for name, frame in last_frames.items():
                 self._writers[name].write(frame)
+            if last_frames:
+                self._frame_count += 1
 
             next_tick += period
             delay = next_tick - time.monotonic()
@@ -496,6 +503,7 @@ class _StepInputLogger:
         runtime_snapshot: Dict[str, Any],
         cfg: RunnerConfig,
         frame_index: Optional[int],
+        video_frame_index: Optional[int] = None,
     ) -> None:
         state = np.asarray(payload.get("state", []), dtype=np.float32).reshape(-1)
         images = payload.get("images") or {}
@@ -517,6 +525,7 @@ class _StepInputLogger:
             "subgoal_image_shapes": {str(k): list(np.asarray(v).shape) for k, v in subgoal_images.items()},
             "frame_index": None if frame_index is None else int(frame_index),
             "subgoal_frame_index": None if frame_index is None else int(frame_index),
+            "video_frame_index": None if video_frame_index is None else int(video_frame_index),
             "subgoal_image_paths": {},
             "subgoal_video_path": str(self._subgoal_video_path) if subgoal_images else "",
             "subgoal_video_frames": int(self._subgoal_frames),
@@ -975,6 +984,10 @@ class EvalRunner:
             return
         with self._handler_lock:
             mode = self._handler.name
+        video_frame_index = None
+        recorder = self._video_recorder
+        if recorder is not None:
+            video_frame_index = recorder.video_frame_count
         input_logger.log_step(
             payload,
             raw_obs,
@@ -984,6 +997,7 @@ class EvalRunner:
             runtime_snapshot=self._runtime.snapshot(),
             cfg=self._cfg,
             frame_index=frame_index,
+            video_frame_index=video_frame_index,
         )
 
     # ------------------------------------------------------------------ #

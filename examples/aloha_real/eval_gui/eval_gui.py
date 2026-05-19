@@ -879,11 +879,15 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.rb_subgoal_foreact = QtWidgets.QRadioButton("ForeAct Server")
         self.rb_subgoal_foreact.setChecked(True)
         self.rb_subgoal_gpt = QtWidgets.QRadioButton("GPT Generation")
+        self.rb_subgoal_reference = QtWidgets.QRadioButton("Reference Video")
         self.bg_subgoal_source.addButton(self.rb_subgoal_foreact)
         self.bg_subgoal_source.addButton(self.rb_subgoal_gpt)
+        self.bg_subgoal_source.addButton(self.rb_subgoal_reference)
         self.rb_subgoal_gpt.toggled.connect(self._on_subgoal_source_changed)
+        self.rb_subgoal_reference.toggled.connect(self._on_subgoal_source_changed)
         subgoal_src_row.addWidget(self.rb_subgoal_foreact)
         subgoal_src_row.addWidget(self.rb_subgoal_gpt)
+        subgoal_src_row.addWidget(self.rb_subgoal_reference)
         subgoal_src_row.addStretch(1)
         subgoal_source_layout.addLayout(subgoal_src_row)
 
@@ -907,9 +911,58 @@ class EvalGUI(QtWidgets.QMainWindow):
         gpt_prompt_row.addWidget(self.le_gpt_prompt, 1)
         subgoal_source_layout.addLayout(gpt_prompt_row)
 
+        ref_video_row = QtWidgets.QHBoxLayout()
+        ref_video_row.addWidget(QtWidgets.QLabel("Video:"))
+        self.le_ref_video_path = QtWidgets.QLineEdit()
+        self.le_ref_video_path.setPlaceholderText("Select *_video_base.mp4")
+        self.le_ref_video_path.setEnabled(False)
+        ref_video_row.addWidget(self.le_ref_video_path, 1)
+        self.btn_browse_ref_video = QtWidgets.QPushButton("Browse...")
+        self.btn_browse_ref_video.setEnabled(False)
+        self.btn_browse_ref_video.clicked.connect(self._on_browse_ref_video)
+        ref_video_row.addWidget(self.btn_browse_ref_video)
+        subgoal_source_layout.addLayout(ref_video_row)
+
+        ref_jsonl_row = QtWidgets.QHBoxLayout()
+        ref_jsonl_row.addWidget(QtWidgets.QLabel("Log:"))
+        self.le_ref_jsonl_path = QtWidgets.QLineEdit()
+        self.le_ref_jsonl_path.setPlaceholderText("Auto-detected from video path")
+        self.le_ref_jsonl_path.setReadOnly(True)
+        self.le_ref_jsonl_path.setStyleSheet("background:#2a2a2a; color:#aaa;")
+        ref_jsonl_row.addWidget(self.le_ref_jsonl_path, 1)
+        subgoal_source_layout.addLayout(ref_jsonl_row)
+
+        ref_offset_row = QtWidgets.QHBoxLayout()
+        ref_offset_row.addWidget(QtWidgets.QLabel("Video Sync Offset (s):"))
+        self.sp_ref_video_offset = QtWidgets.QDoubleSpinBox()
+        self.sp_ref_video_offset.setRange(0.0, 999.0)
+        self.sp_ref_video_offset.setSingleStep(0.5)
+        self.sp_ref_video_offset.setDecimals(1)
+        self.sp_ref_video_offset.setValue(0.0)
+        self.sp_ref_video_offset.setToolTip(
+            "Seconds the video was recording before Step 1. "
+            "Positive = shift lookup forward (later frames)."
+        )
+        self.sp_ref_video_offset.setEnabled(False)
+        ref_offset_row.addWidget(self.sp_ref_video_offset)
+        ref_offset_row.addWidget(QtWidgets.QLabel("  Control Hz:"))
+        self.sp_ref_control_hz = QtWidgets.QDoubleSpinBox()
+        self.sp_ref_control_hz.setRange(1.0, 200.0)
+        self.sp_ref_control_hz.setSingleStep(5.0)
+        self.sp_ref_control_hz.setDecimals(1)
+        self.sp_ref_control_hz.setValue(30.0)
+        self.sp_ref_control_hz.setToolTip(
+            "Policy control frequency in Hz. Used when no JSON log is available."
+        )
+        self.sp_ref_control_hz.setEnabled(False)
+        ref_offset_row.addWidget(self.sp_ref_control_hz)
+        ref_offset_row.addStretch(1)
+        subgoal_source_layout.addLayout(ref_offset_row)
+
         self.lbl_subgoal_source_note = QtWidgets.QLabel(
             "ForeAct uses the configured host/port above. "
-            "GPT requires a valid API key."
+            "GPT requires a valid API key. "
+            "Reference Video pre-extracts frames from a successful evaluation."
         )
         self.lbl_subgoal_source_note.setStyleSheet("color:#888;")
         subgoal_source_layout.addWidget(self.lbl_subgoal_source_note)
@@ -1737,9 +1790,15 @@ class EvalGUI(QtWidgets.QMainWindow):
             kwargs["traj_step_interval"] = n
             kwargs["manual_traj_provider"] = self._request_manual_trajectory
             kwargs["manual_traj_override"] = self._manual_traj_override_enabled()
+            if self._subgoal_use_reference():
+                kwargs["foreact_client"] = self._build_reference_video_client()
+            elif self._subgoal_use_gpt():
+                kwargs["foreact_client"] = self._build_gpt_subgoal_client()
         elif mode == "subgoal":
             kwargs["subgoal_step_interval"] = n
-            if self._subgoal_use_gpt():
+            if self._subgoal_use_reference():
+                kwargs["foreact_client"] = self._build_reference_video_client()
+            elif self._subgoal_use_gpt():
                 kwargs["foreact_client"] = self._build_gpt_subgoal_client()
         elif mode == "subtask":
             kwargs["subtask_step_interval"] = n
@@ -1747,6 +1806,9 @@ class EvalGUI(QtWidgets.QMainWindow):
 
     def _subgoal_use_gpt(self) -> bool:
         return bool(getattr(self, "rb_subgoal_gpt", None) and self.rb_subgoal_gpt.isChecked())
+
+    def _subgoal_use_reference(self) -> bool:
+        return bool(getattr(self, "rb_subgoal_reference", None) and self.rb_subgoal_reference.isChecked())
 
     def _build_gpt_subgoal_client(self):
         from .gpt_subgoal_client import GptSubgoalClient
@@ -1764,6 +1826,47 @@ class EvalGUI(QtWidgets.QMainWindow):
         if custom_prompt:
             client._custom_prompt = custom_prompt
         return client
+
+    def _build_reference_video_client(self):
+        from .reference_video_provider import ReferenceVideoProvider
+
+        video_path = self.le_ref_video_path.text().strip()
+        jsonl_path = self.le_ref_jsonl_path.text().strip() or None
+        if not video_path:
+            raise ValueError("Reference Video requires a video file.")
+        step_interval = int(self.sp_interval.value())
+        video_offset_s = float(self.sp_ref_video_offset.value())
+        control_hz = float(self.sp_ref_control_hz.value())
+        return ReferenceVideoProvider(
+            video_path, jsonl_path, step_interval,
+            video_offset_s=video_offset_s, control_hz=control_hz,
+        )
+
+    def _on_browse_ref_video(self) -> None:
+        start_dir = str(_REPO_ROOT)
+        current = self.le_ref_video_path.text().strip()
+        if current:
+            p = pathlib.Path(current)
+            if p.parent.exists():
+                start_dir = str(p.parent)
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select reference video", start_dir, "Video (*.mp4);;All files (*)"
+        )
+        if not path:
+            return
+        self.le_ref_video_path.setText(path)
+        self._auto_detect_ref_jsonl(path)
+
+    def _auto_detect_ref_jsonl(self, video_path: str) -> None:
+        p = pathlib.Path(video_path)
+        stem = p.stem
+        for suffix in ("_video_base", "_video_left_wrist", "_video_right_wrist"):
+            stem = stem.replace(suffix, "")
+        candidate = p.parent / f"{stem}_log.jsonl"
+        if candidate.exists():
+            self.le_ref_jsonl_path.setText(str(candidate))
+        else:
+            self.le_ref_jsonl_path.setText("")
 
     def _manual_traj_override_enabled(self) -> bool:
         return bool(getattr(self, "rb_traj_manual", None) and self.rb_traj_manual.isChecked())
@@ -1965,18 +2068,34 @@ class EvalGUI(QtWidgets.QMainWindow):
 
     def _update_subgoal_source_controls(self) -> None:
         mode = self._canonical_mode(self._runtime.mode)
-        visible = mode == "subgoal"
+        visible = mode in ("subgoal", "triple_cot")
         self.gb_subgoal_source.setVisible(visible)
         self.gb_subgoal_source.setEnabled(visible)
         if visible:
             gpt_selected = self.rb_subgoal_gpt.isChecked()
+            ref_selected = self._subgoal_use_reference()
             self.le_gpt_api_key.setEnabled(gpt_selected)
             self.le_gpt_prompt.setEnabled(gpt_selected)
+            self.le_ref_video_path.setEnabled(ref_selected)
+            self.btn_browse_ref_video.setEnabled(ref_selected)
+            self.sp_ref_video_offset.setEnabled(ref_selected)
+            self.sp_ref_control_hz.setEnabled(ref_selected)
 
-    def _on_subgoal_source_changed(self, gpt_selected: bool) -> None:
+    def _on_subgoal_source_changed(self, _toggled: bool) -> None:
+        gpt_selected = self.rb_subgoal_gpt.isChecked()
+        ref_selected = self._subgoal_use_reference()
         self.le_gpt_api_key.setEnabled(gpt_selected)
         self.le_gpt_prompt.setEnabled(gpt_selected)
-        source = "GPT Generation" if gpt_selected else "ForeAct Server"
+        self.le_ref_video_path.setEnabled(ref_selected)
+        self.btn_browse_ref_video.setEnabled(ref_selected)
+        self.sp_ref_video_offset.setEnabled(ref_selected)
+        self.sp_ref_control_hz.setEnabled(ref_selected)
+        if ref_selected:
+            source = "Reference Video"
+        elif gpt_selected:
+            source = "GPT Generation"
+        else:
+            source = "ForeAct Server"
         self._log_info(f"Subgoal source -> {source}")
         if self._runner is not None:
             try:
