@@ -18,6 +18,7 @@ import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
+import openpi.policies.bridge_policy as bridge_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.shared.download as _download
@@ -65,6 +66,8 @@ class AssetsConfig:
 class DataConfig:
     # LeRobot repo id. If None, fake data will be created.
     repo_id: str | None = None
+    # Local root directory for the dataset. If provided, the dataset will be loaded from this path.
+    local_root: str | None = None
     # Directory within the assets directory containing the data assets.
     asset_id: str | None = None
     # Contains precomputed normalization stats. If None, normalization will not be performed.
@@ -2284,6 +2287,55 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=20_000,
         batch_size=32,
+    ),
+    #
+    # Fine-tuning Bridge configs.
+    #
+    TrainConfig(
+        name="pi05_bridge",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=5,
+        ),
+        data=SimpleDataConfig(
+            repo_id="bridge_orig_lerobot",
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[bridge_policy.BridgeInputs(model_type=ModelType.PI05)],
+            ),
+            model_transforms=ModelTransformFactory(),
+            base_config=DataConfig(
+                local_root="/media/raid/workspace/xiahongyu/agentic-openpi/Datasets/bridge_orig_lerobot",
+                prompt_from_task=True,
+                action_sequence_keys=("action",),
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "observation/image": "observation.images.image_0",
+                                "observation/state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+            ),
+        ),
+        pytorch_weight_path="/media/raid/workspace/xiahongyu/.cache/pi05_base_pytorch",
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        batch_size=64,
+        num_train_steps=30_000,
+        save_interval=2000,
+        keep_period=5000,
+        fsdp_devices=8,
     ),
     #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
