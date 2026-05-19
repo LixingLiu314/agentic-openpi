@@ -2345,13 +2345,13 @@ _CONFIGS = [
             action_horizon=5,
         ),
         data=SimpleDataConfig(
-            repo_id="bridge_cond_lerobot",
+            repo_id="bridge_cond_aligned_lerobot",
             data_transforms=lambda model: _transforms.Group(
                 inputs=[bridge_policy.BridgeInputs(model_type=ModelType.PI05)],
             ),
             model_transforms=ModelTransformFactory(),
             base_config=DataConfig(
-                local_root="./Datasets/bridge_cond_lerobot",
+                local_root="./Datasets/bridge_cond_aligned_lerobot",
                 prompt_from_task=True,
                 action_sequence_keys=("action",),
                 repack_transforms=_transforms.Group(
