@@ -5,7 +5,7 @@ This script writes a new LeRobot-style dataset instead of editing the input
 dataset in place. It adds chunk-start-aligned ``subtask`` and ``traj_cot``
 columns, keeps only episodes with complete data for both columns, registers
 Bridge subgoal video streams in metadata, symlinks regular videos, and
-materializes chunk-start-aligned subgoal videos.
+materializes future chunk-boundary subgoal videos.
 """
 
 from __future__ import annotations
@@ -33,7 +33,8 @@ except ImportError:  # pragma: no cover - tqdm is available in the repo env.
 
 
 DEFAULT_SUBTASK_JSON_NAME = "cot_by_episode.json"
-DEFAULT_SUBGOAL_VIDEO_KEYS = ("image_0_subgoal_gt", "image_0_subgoal_foreact")
+DEFAULT_SUBGOAL_VIDEO_KEYS = ("image_0_subgoal_gt",)
+DEFAULT_EXCLUDED_VIDEO_KEYS = ("image_0_future", "image_0_goal", "image_0_subgoal_foreact")
 
 _VALIDATE_CONTEXT: dict[str, Any] | None = None
 _WRITE_CONTEXT: dict[str, Any] | None = None
@@ -79,7 +80,7 @@ def write_episode_worker(payload: dict[str, Any]) -> dict[str, Any]:
     frame_indices = list(range(num_frames))
     subtask_values = align_text_to_chunk_starts(record["subtask"], num_frames, chunk_size)
     traj_values = align_text_to_chunk_starts(record["traj_cot"], num_frames, chunk_size)
-    subgoal_source_indices = chunk_start_indices(num_frames, chunk_size)
+    subgoal_source_indices = future_chunk_boundary_indices(num_frames, chunk_size)
 
     table = add_or_replace_column(table, "episode_index", pa.array([new_episode_index] * num_frames, pa.int64()))
     table = add_or_replace_column(table, "frame_index", pa.array(frame_indices, pa.int64()))
@@ -99,7 +100,7 @@ def write_episode_worker(payload: dict[str, Any]) -> dict[str, Any]:
             symlink_file(src_video, dst_video)
 
     for video_key in sorted(params["subgoal_video_feature_keys"]):
-        src_video = video_path(input_dir, src_episode_index, chunks_size, video_key)
+        src_video = video_path(input_dir, src_episode_index, chunks_size, params["subgoal_source_feature_key"])
         dst_video = video_path(output_dir, new_episode_index, output_chunks_size, video_key)
         if src_video.exists():
             write_chunk_aligned_video(
@@ -479,8 +480,50 @@ def set_video_feature_codec(feature: dict[str, Any], codec_name: str) -> None:
             feature[info_key]["video.codec"] = codec_name
 
 
-def chunk_start_indices(num_frames: int, chunk_size: int) -> list[int]:
-    return [get_chunk_start_frame(frame, chunk_size) for frame in range(num_frames)]
+def video_feature_key(video_key: str) -> str:
+    if video_key.startswith("observation.images."):
+        return video_key
+    return f"observation.images.{video_key}"
+
+
+def remove_video_features(info: dict[str, Any], modality: dict[str, Any], video_keys: tuple[str, ...]) -> None:
+    feature_keys = {video_feature_key(key) for key in video_keys}
+    short_keys = {key.removeprefix("observation.images.") for key in feature_keys}
+
+    features = info.setdefault("features", {})
+    for feature_key in feature_keys:
+        features.pop(feature_key, None)
+
+    modality_video = modality.setdefault("video", {})
+    for short_key, entry in list(modality_video.items()):
+        original_key = entry.get("original_key") if isinstance(entry, dict) else None
+        if short_key in short_keys or original_key in feature_keys:
+            modality_video.pop(short_key)
+
+
+def prune_unregistered_video_modalities(info: dict[str, Any], modality: dict[str, Any]) -> None:
+    feature_keys = set(info.get("features", {}))
+    modality_video = modality.setdefault("video", {})
+    for short_key, entry in list(modality_video.items()):
+        original_key = entry.get("original_key") if isinstance(entry, dict) else None
+        if original_key is not None and original_key not in feature_keys:
+            modality_video.pop(short_key)
+
+
+def future_chunk_boundary_indices(num_frames: int, chunk_size: int) -> list[int]:
+    """Map each frame to the next chunk boundary frame, clamped at episode end.
+
+    For chunk_size=5 this produces:
+      frames 0..4 -> source frame 5
+      frames 5..9 -> source frame 10
+    If the next boundary is past the episode end, the final frame is reused.
+    """
+    if num_frames <= 0:
+        return []
+    return [
+        min(get_chunk_start_frame(frame, chunk_size) + chunk_size, num_frames - 1)
+        for frame in range(num_frames)
+    ]
 
 
 def write_chunk_aligned_video(
@@ -493,7 +536,7 @@ def write_chunk_aligned_video(
     crf: str,
     preset: str,
 ) -> None:
-    """Write an output video whose frame t is source frame t - (t % chunk_size)."""
+    """Write an output video whose frame t is copied from the requested source index."""
     import av
 
     frames = []
@@ -567,10 +610,10 @@ def validate_subgoal_videos(
     dataset_dir: Path,
     episode_index: int,
     chunks_size: int,
-    subgoal_video_keys: tuple[str, ...],
+    video_keys: tuple[str, ...],
 ) -> bool:
-    for short_key in subgoal_video_keys:
-        feature_key = f"observation.images.{short_key}"
+    for short_key in video_keys:
+        feature_key = video_feature_key(short_key)
         if not video_path(dataset_dir, episode_index, chunks_size, feature_key).exists():
             return False
     return True
@@ -623,7 +666,7 @@ def validate_episode_worker(ep: dict[str, Any]) -> dict[str, Any]:
     missing_traj = traj_missing_frames
 
     text_complete = subtask_missing_chunks == 0 and traj_missing_chunks == 0
-    has_subgoal = validate_subgoal_videos(input_dir, episode_index, chunks_size, params["subgoal_video_keys"])
+    has_subgoal = validate_subgoal_videos(input_dir, episode_index, chunks_size, params["required_subgoal_source_keys"])
 
     kept = None
     if text_complete and (has_subgoal or not params["require_subgoal_videos"]):
@@ -686,7 +729,7 @@ def validate_and_collect(args: argparse.Namespace) -> tuple[list[dict[str, Any]]
         "final_episodes": 0,
         "final_frames": 0,
         "chunk_size": args.chunk_size,
-        "subgoal_alignment": "materialized_chunk_start_videos",
+        "subgoal_alignment": "materialized_future_chunk_boundary_videos",
         "coord_bounds": {
             "x_min": coord_bounds[0],
             "x_max": coord_bounds[1],
@@ -719,7 +762,7 @@ def validate_and_collect(args: argparse.Namespace) -> tuple[list[dict[str, Any]]
         "rdp_epsilon": args.rdp_epsilon,
         "min_dist_threshold": args.min_dist_threshold,
         "max_tokens": args.max_tokens,
-        "subgoal_video_keys": args.subgoal_video_keys,
+        "required_subgoal_source_keys": (args.subgoal_reference_key,),
         "require_subgoal_videos": args.require_subgoal_videos,
     }
     init_validate_worker(validate_context)
@@ -767,6 +810,7 @@ def write_filtered_dataset(args: argparse.Namespace, kept: list[dict[str, Any]],
     modality = read_json(input_dir / "meta" / "modality.json")
     chunks_size = int(info.get("chunks_size", 1000))
 
+    remove_video_features(info, modality, args.exclude_video_keys)
     register_subgoal_videos(
         info,
         modality,
@@ -774,9 +818,13 @@ def write_filtered_dataset(args: argparse.Namespace, kept: list[dict[str, Any]],
         reference_video_key=args.subgoal_reference_key,
         subgoal_video_codec=args.subgoal_video_codec,
     )
+    prune_unregistered_video_modalities(info, modality)
     videos_to_link = video_feature_keys(info)
     subgoal_video_feature_keys = {f"observation.images.{key}" for key in args.subgoal_video_keys}
-    videos_to_symlink = [key for key in videos_to_link if key not in subgoal_video_feature_keys]
+    excluded_video_feature_keys = {video_feature_key(key) for key in args.exclude_video_keys}
+    videos_to_symlink = [
+        key for key in videos_to_link if key not in subgoal_video_feature_keys and key not in excluded_video_feature_keys
+    ]
     fps = float(info.get("fps", 30.0))
 
     prepare_output_dir(output_dir, args.overwrite)
@@ -798,6 +846,7 @@ def write_filtered_dataset(args: argparse.Namespace, kept: list[dict[str, Any]],
         "chunks_size": chunks_size,
         "chunk_size": args.chunk_size,
         "subgoal_video_feature_keys": subgoal_video_feature_keys,
+        "subgoal_source_feature_key": video_feature_key(args.subgoal_reference_key),
         "videos_to_symlink": videos_to_symlink,
         "fps": fps,
         "subgoal_video_codec": args.subgoal_video_codec,
@@ -859,7 +908,7 @@ def write_filtered_dataset(args: argparse.Namespace, kept: list[dict[str, Any]],
     info["total_frames"] = stats["final_frames"]
     info["total_chunks"] = int(math.ceil(stats["final_episodes"] / output_chunks_size)) if stats["final_episodes"] else 0
     info["splits"] = {"train": f"0:{stats['final_episodes']}"}
-    info["total_videos"] = stats["final_episodes"] * len(videos_to_link)
+    info["total_videos"] = stats["final_episodes"] * len(video_feature_keys(info))
     info["features"]["subtask"] = {"dtype": "string", "shape": [1], "names": ["subtask"]}
     info["features"]["traj_cot"] = {"dtype": "string", "shape": [1], "names": ["traj_cot"]}
 
@@ -937,13 +986,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--chunk-size",
         type=int,
         default=5,
-        help="Condition hold interval. Each frame uses the condition from t - (t % chunk_size).",
+        help=(
+            "Condition hold interval. Text conditions use t - (t % chunk_size); "
+            "subgoal videos use the next chunk boundary, clamped at episode end."
+        ),
     )
     parser.add_argument("--rdp-epsilon", type=float, default=3.0)
     parser.add_argument("--min-dist-threshold", type=float, default=20.0)
     parser.add_argument("--max-tokens", type=int, default=10)
 
     parser.add_argument("--subgoal-video-keys", nargs="+", default=list(DEFAULT_SUBGOAL_VIDEO_KEYS))
+    parser.add_argument(
+        "--exclude-video-keys",
+        nargs="+",
+        default=list(DEFAULT_EXCLUDED_VIDEO_KEYS),
+        help=(
+            "Video feature short keys or full keys to drop from output metadata and symlinking. "
+            "Defaults remove image_0_future, image_0_goal, and image_0_subgoal_foreact."
+        ),
+    )
     parser.add_argument("--subgoal-reference-key", default="image_0")
     parser.add_argument("--subgoal-video-codec", default="libx264")
     parser.add_argument("--subgoal-video-crf", default="23")
@@ -971,6 +1032,7 @@ def main() -> None:
     if args.worker_chunksize <= 0:
         raise ValueError(f"--worker-chunksize must be positive, got {args.worker_chunksize}")
     args.subgoal_video_keys = tuple(args.subgoal_video_keys)
+    args.exclude_video_keys = tuple(args.exclude_video_keys)
     args.require_subgoal_videos = not args.no_require_subgoal_videos
 
     if args.output_dir == args.input_dir:
