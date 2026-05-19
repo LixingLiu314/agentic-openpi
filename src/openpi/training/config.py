@@ -2305,7 +2305,7 @@ _CONFIGS = [
             ),
             model_transforms=ModelTransformFactory(),
             base_config=DataConfig(
-                local_root="/media/raid/workspace/xiahongyu/agentic-openpi/Datasets/bridge_orig_lerobot",
+                local_root="./Datasets/bridge_orig_lerobot",
                 prompt_from_task=True,
                 action_sequence_keys=("action",),
                 repack_transforms=_transforms.Group(
@@ -2322,7 +2322,7 @@ _CONFIGS = [
                 ),
             ),
         ),
-        pytorch_weight_path="/media/raid/workspace/xiahongyu/.cache/pi05_base_pytorch",
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1_000,
             peak_lr=5e-5,
