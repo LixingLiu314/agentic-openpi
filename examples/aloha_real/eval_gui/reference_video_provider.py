@@ -130,8 +130,8 @@ class ReferenceVideoProvider:
 
         Returns (step_ts, step_frames, video_fps).
         step_frames is empty if no entries have non-null video_frame_index.
-        Prefers ``video_frame_index`` (main camera); falls back to
-        ``frame_index`` for older logs that only have subgoal frame indices.
+        Only uses ``video_frame_index`` (the actual video frame number);
+        ``frame_index`` is the subgoal sequence index and must NOT be used here.
         """
         step_ts: Dict[int, float] = {}
         step_frames: Dict[int, int] = {}
@@ -147,8 +147,6 @@ class ReferenceVideoProvider:
                 if step is not None and ts is not None:
                     step_ts[int(step)] = float(ts)
                 fi = entry.get("video_frame_index")
-                if fi is None:
-                    fi = entry.get("frame_index")
                 if step is not None and fi is not None:
                     step_frames[int(step)] = int(fi)
                 cfg = entry.get("config")
