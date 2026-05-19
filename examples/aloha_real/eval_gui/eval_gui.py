@@ -732,6 +732,9 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.btn_browse_checkpoint = QtWidgets.QPushButton("Browse...")
         self.btn_browse_checkpoint.clicked.connect(self._on_browse_checkpoint)
         checkpoint_row.addWidget(self.btn_browse_checkpoint)
+        self.btn_clear_cache = QtWidgets.QPushButton("Clear Cache")
+        self.btn_clear_cache.clicked.connect(self._on_clear_cache)
+        checkpoint_row.addWidget(self.btn_clear_cache)
         left.addLayout(checkpoint_row)
 
         output_row = QtWidgets.QHBoxLayout()
@@ -1203,6 +1206,20 @@ class EvalGUI(QtWidgets.QMainWindow):
             self._checkpoint_history_path.write_text(json.dumps(payload, indent=2))
         except Exception as e:                       # noqa: BLE001
             logger.warning("Could not save checkpoint history to %s: %s", self._checkpoint_history_path, e)
+
+    def _on_clear_cache(self) -> None:
+        """Delete the checkpoint history cache and refresh the UI."""
+        path = self._checkpoint_history_path
+        if path.exists():
+            try:
+                path.unlink()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Could not delete cache file %s: %s", path, e)
+                return
+        self._checkpoint_history.clear()
+        self._last_checkpoint_by_mode.clear()
+        self._refresh_policy_fields_for_mode(self._runtime.mode)
+        self._log_info(f"Cache cleared: {path}")
 
     def _checkpoint_text(self) -> str:
         return self.cb_checkpoint.currentText().strip()
