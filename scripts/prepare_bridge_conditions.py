@@ -2,15 +2,17 @@
 """Prepare filtered Bridge condition data for conditional VLA training.
 
 This script writes a new LeRobot-style dataset instead of editing the input
-dataset in place. It adds per-frame ``subtask`` and ``traj_cot`` columns, keeps
-only episodes with complete data for both columns, registers Bridge subgoal
-video streams in metadata, and symlinks videos from the input dataset.
+dataset in place. It adds chunk-start-aligned ``subtask`` and ``traj_cot``
+columns, keeps only episodes with complete data for both columns, registers
+Bridge subgoal video streams in metadata, symlinks regular videos, and
+materializes chunk-start-aligned subgoal videos.
 """
 
 from __future__ import annotations
 
 import argparse
 import copy
+from fractions import Fraction
 import json
 import math
 import os
@@ -28,7 +30,7 @@ except ImportError:  # pragma: no cover - tqdm is available in the repo env.
     tqdm = None
 
 
-DEFAULT_SUBTASK_JSON_NAME = "subtask_window6_startframe_filtered_with_text_traj.json"
+DEFAULT_SUBTASK_JSON_NAME = "cot_by_episode.json"
 DEFAULT_SUBGOAL_VIDEO_KEYS = ("image_0_subgoal_gt", "image_0_subgoal_foreact")
 
 
@@ -135,8 +137,10 @@ def detect_gripper_changes(gripper_values: np.ndarray, threshold: float) -> list
     return changes
 
 
-def get_trajectory_start_frame(current_frame: int, interval: int) -> int:
-    return (current_frame // interval) * interval
+def get_chunk_start_frame(current_frame: int, chunk_size: int) -> int:
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+    return current_frame - (current_frame % chunk_size)
 
 
 def normalize_xy(points_xy: np.ndarray, bounds: tuple[float, float, float, float]) -> np.ndarray:
@@ -230,7 +234,6 @@ def generate_traj_cot(
     gripper_dim: int,
     gripper_threshold: float,
     coord_bounds: tuple[float, float, float, float],
-    interval: int,
     rdp_epsilon: float,
     min_dist_threshold: float,
     max_tokens: int,
@@ -248,26 +251,20 @@ def generate_traj_cot(
     gripper_changes = detect_gripper_changes(gripper_values, gripper_threshold)
 
     num_frames = len(xy_norm)
-    prompts_by_start: dict[int, str] = {}
-    for current_frame in range(0, num_frames, interval):
-        start_frame = get_trajectory_start_frame(current_frame, interval)
+    frame_prompts = {}
+    for start_frame in range(num_frames):
         future_points = [
             (frame, float(xy_norm[frame, 0]), float(xy_norm[frame, 1]))
             for frame in range(start_frame, num_frames)
         ]
         future_gripper_changes = [(frame, action) for frame, action in gripper_changes if frame >= start_frame]
-        prompts_by_start[start_frame] = build_cot_prompt(
+        frame_prompts[str(start_frame)] = build_cot_prompt(
             future_points,
             future_gripper_changes,
             rdp_epsilon=rdp_epsilon,
             min_dist_threshold=min_dist_threshold,
             max_tokens=max_tokens,
         )
-
-    frame_prompts = {}
-    for current_frame in range(num_frames):
-        start_frame = get_trajectory_start_frame(current_frame, interval)
-        frame_prompts[str(current_frame)] = prompts_by_start.get(start_frame, "")
     return frame_prompts
 
 
@@ -313,6 +310,34 @@ def count_missing_text(frame_map: dict[str, str] | None, num_frames: int) -> int
     return missing
 
 
+def load_subtask_prompts(path: Path) -> dict[str, dict[str, str]]:
+    payload = read_json(path)
+    if isinstance(payload, dict) and isinstance(payload.get("prompts"), dict):
+        return payload["prompts"]
+
+    prompts: dict[str, dict[str, str]] = {}
+    for episode_key, episode_payload in payload.items():
+        if not isinstance(episode_payload, dict):
+            continue
+        step_to_subtask = episode_payload.get("step_to_subtask")
+        if not isinstance(step_to_subtask, dict):
+            continue
+        prompts[str(episode_key)] = {
+            str(frame): str(text)
+            for frame, text in step_to_subtask.items()
+            if is_valid_text(text)
+        }
+    return prompts
+
+
+def align_text_to_chunk_starts(frame_map: dict[str, str], num_frames: int, chunk_size: int) -> list[str]:
+    aligned = []
+    for frame in range(num_frames):
+        start_frame = get_chunk_start_frame(frame, chunk_size)
+        aligned.append(frame_map[str(start_frame)])
+    return aligned
+
+
 def add_or_replace_column(table: pa.Table, name: str, values: pa.Array) -> pa.Table:
     if name in table.column_names:
         idx = table.column_names.index(name)
@@ -336,12 +361,80 @@ def symlink_file(src: Path, dst: Path) -> None:
     dst.symlink_to(target)
 
 
+def metadata_codec_name(encoder_name: str) -> str:
+    return {
+        "libx264": "h264",
+        "h264": "h264",
+        "libsvtav1": "av1",
+    }.get(encoder_name, encoder_name)
+
+
+def set_video_feature_codec(feature: dict[str, Any], codec_name: str) -> None:
+    for info_key in ("info", "video_info"):
+        if info_key in feature:
+            feature[info_key]["video.codec"] = codec_name
+
+
+def chunk_start_indices(num_frames: int, chunk_size: int) -> list[int]:
+    return [get_chunk_start_frame(frame, chunk_size) for frame in range(num_frames)]
+
+
+def write_chunk_aligned_video(
+    src_video: Path,
+    dst_video: Path,
+    source_indices: list[int],
+    *,
+    fps: float,
+    codec: str,
+    crf: str,
+    preset: str,
+) -> None:
+    """Write an output video whose frame t is source frame t - (t % chunk_size)."""
+    import av
+
+    frames = []
+    with av.open(str(src_video)) as container:
+        for frame in container.decode(video=0):
+            frames.append(frame.to_ndarray(format="rgb24"))
+
+    if len(frames) != len(source_indices):
+        raise ValueError(
+            f"Subgoal video frame count mismatch for {src_video}: "
+            f"decoded={len(frames)} parquet={len(source_indices)}"
+        )
+
+    if not frames:
+        raise ValueError(f"Subgoal video has no frames: {src_video}")
+
+    dst_video.parent.mkdir(parents=True, exist_ok=True)
+    height, width = frames[0].shape[:2]
+    options = {}
+    if codec in {"libx264", "h264"}:
+        options = {"crf": str(crf), "preset": preset}
+
+    rate = Fraction(str(fps)).limit_denominator()
+    with av.open(str(dst_video), "w") as container:
+        stream = container.add_stream(codec, rate=rate, options=options)
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = "yuv420p"
+
+        for out_idx, src_idx in enumerate(source_indices):
+            out_frame = av.VideoFrame.from_ndarray(frames[src_idx], format="rgb24")
+            out_frame.pts = out_idx
+            for packet in stream.encode(out_frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+
+
 def register_subgoal_videos(
     info: dict[str, Any],
     modality: dict[str, Any],
     *,
     subgoal_video_keys: tuple[str, ...],
     reference_video_key: str,
+    subgoal_video_codec: str | None = None,
 ) -> None:
     features = info.setdefault("features", {})
     ref_feature_key = f"observation.images.{reference_video_key}"
@@ -353,6 +446,8 @@ def register_subgoal_videos(
         feature_key = f"observation.images.{short_key}"
         if feature_key not in features:
             features[feature_key] = copy.deepcopy(features[ref_feature_key])
+        if subgoal_video_codec is not None:
+            set_video_feature_codec(features[feature_key], metadata_codec_name(subgoal_video_codec))
         modality_video[short_key] = {"original_key": feature_key}
 
 
@@ -381,8 +476,7 @@ def validate_and_collect(args: argparse.Namespace) -> tuple[list[dict[str, Any]]
     input_dir = args.input_dir
     info = read_json(input_dir / "meta" / "info.json")
     episodes = read_jsonl(input_dir / "meta" / "episodes.jsonl")
-    subtask_payload = read_json(args.subtask_json)
-    subtask_prompts = subtask_payload.get("prompts", {})
+    subtask_prompts = load_subtask_prompts(args.subtask_json)
 
     coord_bounds = args.coord_bounds
     if coord_bounds is None:
@@ -411,6 +505,8 @@ def validate_and_collect(args: argparse.Namespace) -> tuple[list[dict[str, Any]]
         "strict_text_intersection_frames": 0,
         "final_episodes": 0,
         "final_frames": 0,
+        "chunk_size": args.chunk_size,
+        "subgoal_alignment": "materialized_chunk_start_videos",
         "coord_bounds": {
             "x_min": coord_bounds[0],
             "x_max": coord_bounds[1],
@@ -444,7 +540,6 @@ def validate_and_collect(args: argparse.Namespace) -> tuple[list[dict[str, Any]]
                 gripper_dim=args.gripper_dim,
                 gripper_threshold=args.gripper_threshold,
                 coord_bounds=coord_bounds,
-                interval=args.interval,
                 rdp_epsilon=args.rdp_epsilon,
                 min_dist_threshold=args.min_dist_threshold,
                 max_tokens=args.max_tokens,
@@ -456,6 +551,18 @@ def validate_and_collect(args: argparse.Namespace) -> tuple[list[dict[str, Any]]
         subtask = subtask_prompts.get(str(episode_index))
         missing_subtask = count_missing_text(subtask, num_frames)
         missing_traj = count_missing_text(traj_cot, num_frames)
+        if missing_subtask == 0:
+            missing_subtask = sum(
+                1
+                for frame in range(num_frames)
+                if not is_valid_text(subtask.get(str(get_chunk_start_frame(frame, args.chunk_size))))
+            )
+        if missing_traj == 0:
+            missing_traj = sum(
+                1
+                for frame in range(num_frames)
+                if not is_valid_text(traj_cot.get(str(get_chunk_start_frame(frame, args.chunk_size))))
+            )
 
         if missing_subtask:
             stats["episodes_missing_subtask"] += 1
@@ -502,8 +609,12 @@ def write_filtered_dataset(args: argparse.Namespace, kept: list[dict[str, Any]],
         modality,
         subgoal_video_keys=args.subgoal_video_keys,
         reference_video_key=args.subgoal_reference_key,
+        subgoal_video_codec=args.subgoal_video_codec,
     )
     videos_to_link = video_feature_keys(info)
+    subgoal_video_feature_keys = {f"observation.images.{key}" for key in args.subgoal_video_keys}
+    videos_to_symlink = [key for key in videos_to_link if key not in subgoal_video_feature_keys]
+    fps = float(info.get("fps", 30.0))
 
     prepare_output_dir(output_dir, args.overwrite)
     (output_dir / "meta").mkdir(parents=True, exist_ok=True)
@@ -527,8 +638,9 @@ def write_filtered_dataset(args: argparse.Namespace, kept: list[dict[str, Any]],
         table = pq.read_table(src_parquet)
         num_frames = table_length(table)
         frame_indices = list(range(num_frames))
-        subtask_values = [record["subtask"][str(frame)] for frame in frame_indices]
-        traj_values = [record["traj_cot"][str(frame)] for frame in frame_indices]
+        subtask_values = align_text_to_chunk_starts(record["subtask"], num_frames, args.chunk_size)
+        traj_values = align_text_to_chunk_starts(record["traj_cot"], num_frames, args.chunk_size)
+        subgoal_source_indices = chunk_start_indices(num_frames, args.chunk_size)
 
         table = add_or_replace_column(table, "episode_index", pa.array([new_episode_index] * num_frames, pa.int64()))
         table = add_or_replace_column(table, "frame_index", pa.array(frame_indices, pa.int64()))
@@ -541,11 +653,25 @@ def write_filtered_dataset(args: argparse.Namespace, kept: list[dict[str, Any]],
         table = add_or_replace_column(table, "traj_cot", pa.array(traj_values, pa.string()))
         pq.write_table(table, dst_parquet)
 
-        for video_key in videos_to_link:
+        for video_key in videos_to_symlink:
             src_video = video_path(input_dir, src_episode_index, chunks_size, video_key)
             dst_video = video_path(output_dir, new_episode_index, output_chunks_size, video_key)
             if src_video.exists():
                 symlink_file(src_video, dst_video)
+
+        for video_key in sorted(subgoal_video_feature_keys):
+            src_video = video_path(input_dir, src_episode_index, chunks_size, video_key)
+            dst_video = video_path(output_dir, new_episode_index, output_chunks_size, video_key)
+            if src_video.exists():
+                write_chunk_aligned_video(
+                    src_video,
+                    dst_video,
+                    subgoal_source_indices,
+                    fps=fps,
+                    codec=args.subgoal_video_codec,
+                    crf=args.subgoal_video_crf,
+                    preset=args.subgoal_video_preset,
+                )
 
         source_map.append(
             {
@@ -592,6 +718,8 @@ def print_report(stats: dict[str, Any]) -> None:
     print(f"Frames missing subgoal video:   {stats['frames_missing_subgoal_video']}")
     print(f"Final filtered episodes: {stats['final_episodes']}")
     print(f"Final filtered frames:   {stats['final_frames']}")
+    print(f"Chunk size: {stats['chunk_size']}")
+    print(f"Subgoal alignment: {stats['subgoal_alignment']}")
     print(f"Coordinate bounds: {stats['coord_bounds']}")
 
 
@@ -630,13 +758,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stats-file", default="stats_gr00t.json")
     parser.add_argument("--gripper-dim", type=int, default=6)
     parser.add_argument("--gripper-threshold", type=float, default=0.5)
-    parser.add_argument("--interval", type=int, default=6)
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=10,
+        help="Condition hold interval. Each frame uses the condition from t - (t % chunk_size).",
+    )
     parser.add_argument("--rdp-epsilon", type=float, default=3.0)
     parser.add_argument("--min-dist-threshold", type=float, default=20.0)
     parser.add_argument("--max-tokens", type=int, default=10)
 
     parser.add_argument("--subgoal-video-keys", nargs="+", default=list(DEFAULT_SUBGOAL_VIDEO_KEYS))
     parser.add_argument("--subgoal-reference-key", default="image_0")
+    parser.add_argument("--subgoal-video-codec", default="libx264")
+    parser.add_argument("--subgoal-video-crf", default="23")
+    parser.add_argument("--subgoal-video-preset", default="medium")
     parser.add_argument("--no-require-subgoal-videos", action="store_true")
     return parser
 
@@ -649,6 +785,8 @@ def main() -> None:
     if args.subtask_json is None:
         args.subtask_json = args.input_dir / "subtask_data" / DEFAULT_SUBTASK_JSON_NAME
     args.subtask_json = args.subtask_json.expanduser().resolve()
+    if args.chunk_size <= 0:
+        raise ValueError(f"--chunk-size must be positive, got {args.chunk_size}")
     args.subgoal_video_keys = tuple(args.subgoal_video_keys)
     args.require_subgoal_videos = not args.no_require_subgoal_videos
 
