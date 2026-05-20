@@ -187,3 +187,10 @@ aloha_merged_banana_cube/
 traj_data/
 playground/
 archive_video/
+results/
+logs/
+
+# Local agent/tool state and generated debug artifacts.
+.claude/
+output*.png
+*_research_report.md
