@@ -2386,6 +2386,54 @@ _CONFIGS = [
         fsdp_devices=8,
     ),
     TrainConfig(
+        name="pi05_bridge_traj",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=5,
+        ),
+        data=SimpleDataConfig(
+            repo_id="bridge_cond_aligned_lerobot",
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[bridge_policy.BridgeInputs(model_type=ModelType.PI05)],
+            ),
+            model_transforms=ModelTransformFactory(),
+            base_config=DataConfig(
+                local_root="./Datasets/bridge_cond_aligned_lerobot",
+                prompt_from_task=True,
+                action_sequence_keys=("action",),
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "observation/image": "observation.images.image_0",
+                                "observation/state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                                "traj_cot": "traj_cot",
+                            }
+                        ),
+                        _transforms.AppendTrajCotToPrompt(),
+                    ]
+                ),
+            ),
+        ),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        batch_size=64,
+        num_train_steps=30_000,
+        save_interval=2000,
+        keep_period=5000,
+        fsdp_devices=8,
+    ),
+    TrainConfig(
         name="pi05_bridge_subgoal",
         model=pi0_config.Pi0Config(
             pi05=True,
