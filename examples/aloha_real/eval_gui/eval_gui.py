@@ -43,29 +43,29 @@ _MODE_DESCRIPTIONS = {
 
 _POLICY_PRESETS = {
     "basic": {
-        "label": "basic - aloha_shape baseline",
-        "config": "pi05_aloha_three_object_baseline",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/three_object/pi05_aloha_three_object_baseline/three_object_baseline/{step}",
+        "label": "basic - aloha_letter baseline",
+        "config": "pi05_aloha_eai_baseline",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_baseline/eai_baseline/{step}",
     },
     "traj": {
-        "label": "traj - aloha_shape trajectory cot",
-        "config": "pi05_aloha_three_object_traj",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/three_object/pi05_aloha_three_object_traj/three_object_traj/{step}",
+        "label": "traj - aloha_letter trajectory cot",
+        "config": "pi05_aloha_eai_traj",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_traj/eai_traj/{step}",
     },
     "subtask": {
-        "label": "subtask - aloha_shape labels",
-        "config": "pi05_aloha_three_object_subtask",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/three_object/pi05_aloha_three_object_subtask/three_object_subtask/{step}",
+        "label": "subtask - aloha_letter labels",
+        "config": "pi05_aloha_eai_subtask",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_subtask/eai_subtask/{step}",
     },
     "triple_cot": {
-        "label": "triple-cot - aloha_shape all cot",
-        "config": "pi05_aloha_three_object_all_cot",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/three_object/pi05_aloha_three_object_all_cot/three_object_all_cot/{step}",
+        "label": "triple-cot - aloha_letter all cot",
+        "config": "pi05_aloha_eai_all_cot",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_all_cot/eai_all_cot/{step}",
     },
     "subgoal": {
-        "label": "subgoal - aloha_shape base camera",
-        "config": "pi05_aloha_three_object_subgoal",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/three_object/pi05_aloha_three_object_subgoal/three_object_subgoal/{step}",
+        "label": "subgoal - aloha_letter base camera",
+        "config": "pi05_aloha_eai_subgoal",
+        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_subgoal/eai_subgoal/{step}",
     },
 }
 
@@ -80,6 +80,7 @@ _CHECKPOINT_HISTORY_LIMIT = 30
 _CHECKPOINT_HISTORY_ENV = "AGENTIC_OPENPI_EVAL_GUI_HISTORY"
 _TRAJ_RETRIEVAL_CACHE_ENV = "AGENTIC_OPENPI_TRAJ_RETRIEVAL_CACHE"
 _TRAJ_RETRIEVAL_DATASET_ENV = "AGENTIC_OPENPI_TRAJ_RETRIEVAL_DATASET"
+_DEFAULT_TRAJ_RETRIEVAL_DATASET = _REPO_ROOT / "playground" / "Datasets" / "aloha_letter"
 
 
 def _np_to_qpixmap(img_hwc_rgb: Optional[np.ndarray], target_w: int, target_h: int) -> QtGui.QPixmap:
@@ -203,6 +204,12 @@ class ManualTrajectoryDialog(QtWidgets.QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Manual Trajectory Annotation")
+        self.setWindowFlags(
+            QtCore.Qt.Window
+            | QtCore.Qt.WindowTitleHint
+            | QtCore.Qt.WindowCloseButtonHint
+            | QtCore.Qt.WindowMinMaxButtonsHint
+        )
         self.setModal(True)
         self.setFocusPolicy(QtCore.Qt.StrongFocus)
         self.resize(980, 760)
@@ -1264,6 +1271,7 @@ class EvalGUI(QtWidgets.QMainWindow):
             for name in (
                 "three_object",
                 "aloha_shape",
+                "aloha_letter",
                 "matching_holes",
                 "matching holes",
                 "shape",
@@ -1281,6 +1289,8 @@ class EvalGUI(QtWidgets.QMainWindow):
         }
         if markers & {"three_object", "aloha_shape", "matching_holes", "matching holes", "shape"}:
             markers.update({"three_object", "aloha_shape", "matching_holes", "shape"})
+        if markers & {"aloha_letter", "eai", "letter", "stick"}:
+            markers.update({"aloha_letter", "eai", "letter", "stick"})
         return markers
 
     @staticmethod
@@ -1430,6 +1440,8 @@ class EvalGUI(QtWidgets.QMainWindow):
         dataset = os.environ.get(_TRAJ_RETRIEVAL_DATASET_ENV, "").strip()
         if dataset:
             return str(default_cache_path(dataset))
+        if _DEFAULT_TRAJ_RETRIEVAL_DATASET.exists():
+            return str(default_cache_path(_DEFAULT_TRAJ_RETRIEVAL_DATASET))
         return ""
 
     def _trajectory_retrieval_cache_path(self) -> Optional[pathlib.Path]:

@@ -68,12 +68,12 @@ logger = logging.getLogger(__name__)
 #     3: "Move the cuboid on the hole",
 #     4: "Put the cuboid in the hole"
 # }
-DEFAULT_TASK_PROMPT = "put the shapes into the matching holes"
+DEFAULT_TASK_PROMPT = 'Construct the letters "EAI" using sticks'
 
 DEFAULT_SUBTASK_LABELS: Dict[int, str] = {
-    1: "put the cylinder into the left hole",
-    2: "put the cube into the middle hole",
-    3: "put the hexagonal prism into the right hole",
+    1: "construct letter 'E'",
+    2: "construct letter 'A'",
+    3: "construct letter 'I'",
 }
 
 def to_chw_uint8(img_hwc_rgb: np.ndarray, h: int = 224, w: int = 224) -> np.ndarray:
