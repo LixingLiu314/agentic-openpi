@@ -20,8 +20,8 @@ import tqdm
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-SRC = pathlib.Path("Datasets/avoid_obstable/aloha_banana_obstacle_gripper_binary")
-DST = pathlib.Path("Datasets/avoid_obstable/aloha_banana_obstacle_gripper_binary")
+SRC = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/three_object/aloha_shape")
+DST = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/three_object/three_object_lerobot_binary")
 
 CODEC = "libsvtav1"
 G     = 2    # keyframe every 2 frames → fast random seeking

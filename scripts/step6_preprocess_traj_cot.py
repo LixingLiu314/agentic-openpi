@@ -27,7 +27,7 @@ import re
 import pandas as pd
 import tqdm
 
-DATASET_DIR    = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/avoid_obstable/aloha_banana_obstacle_gripper_binary")
+DATASET_DIR    = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/three_object/three_object_lerobot_binary")
 COT_JSON       = DATASET_DIR / "trajectory_data" / "cot_text_prompts.json"
 PARQUET_DIR    = DATASET_DIR / "data" / "chunk-000"
 EPISODES_JSONL = DATASET_DIR / "meta" / "episodes.jsonl"
@@ -94,6 +94,18 @@ def main(dry_run: bool) -> None:
     else:
         action = "Would write" if dry_run else "Written"
         print(f"\n{action} traj_cot to {len(episodes)} parquet files.")
+
+    if not dry_run and not errors:
+        info_path = DATASET_DIR / "meta" / "info.json"
+        info = json.loads(info_path.read_text())
+        if "traj_cot" not in info["features"]:
+            info["features"]["traj_cot"] = {
+                "dtype": "string",
+                "shape": [1],
+                "names": ["traj_cot"],
+            }
+            info_path.write_text(json.dumps(info, indent=2, ensure_ascii=False) + "\n")
+            print("Updated meta/info.json with traj_cot feature.")
 
 
 if __name__ == "__main__":

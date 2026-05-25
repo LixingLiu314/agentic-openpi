@@ -1,6 +1,6 @@
 """
 Step 2 — Patch subtask labels into parquet from source HDF5 files.
-Patch aloha_object_lerobot dataset in-place:
+Patch lerobot dataset in-place:
   1. Add 'subtask' column to every parquet from observations/subtask in the source HDF5.
   2. Update meta/info.json to register the new subtask feature.
 
@@ -13,8 +13,8 @@ import pathlib
 import h5py
 import pandas as pd
 
-DATASET_DIR = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/avoid_obstable/aloha_banana_obstacle")
-HDF5_ROOT   = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/avoid_obstable/put_the_banana_on_the_plate")
+DATASET_DIR = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/three_object/aloha_shape")
+HDF5_ROOT   = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/three_object/put_the_shapes_into_the_matching_holes")
 
 
 def hdf5_path(source_path: str) -> pathlib.Path:

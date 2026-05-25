@@ -1,24 +1,33 @@
 """
-Step 3 — Create aloha_object_lerobot_gripper_binary from aloha_object_lerobot.
-Changes to action only:
-  - Joint  6 (left  gripper) binarized: always 0.09 (OPEN_VAL) because raw value ~0.165 > CLOSE_THRESH
-  - Joint 13 (right gripper) binarized: < 0.05 → 0.00, >= 0.05 → 0.09
-  - All other joints (0-5, 7-12) unchanged
+Step 3 — Copy lerobot dataset with optional gripper binarization.
 
-Bug fixes applied during copy:
+Always applied (bug fixes):
   - Video path columns dropped from parquets (lerobot decodes from files directly;
     keeping them causes path strings to overwrite decoded tensors at load time)
   - episodes_stats.jsonl regenerated in correct lerobot format:
     {"episode_index": N, "stats": {"feature": {min,max,mean,std,count}, ...}}
     (source file has a flat layout that lerobot rejects with KeyError: 'stats')
 
-videos/       → symlink to original (unchanged)
-data/         → copied parquets with patched action, video columns dropped
-meta/         → copied and updated (repo_id + regenerated episodes_stats.jsonl)
-data_quality/ → symlink to original
+With --binarize (optional):
+  - Joint  6 (left  gripper): < CLOSE_THRESH → 0.00, >= CLOSE_THRESH → OPEN_VAL
+  - Joint 13 (right gripper): < CLOSE_THRESH → 0.00, >= CLOSE_THRESH → OPEN_VAL
+  - All other joints unchanged
+
+Usage:
+  # Without binarization (raw action kept):
+  python step3_create_gripper_binary.py
+
+  # With binarization:
+  python step3_create_gripper_binary.py --binarize
+
+videos/          → symlink to original (unchanged)
+data/            → copied parquets with video columns dropped (action patched if --binarize)
+meta/            → copied and updated (repo_id + regenerated episodes_stats.jsonl)
+data_quality/    → symlink to original
 trajectory_data/ → symlink to original
 """
 
+import argparse
 import json
 import pathlib
 import shutil
@@ -26,19 +35,16 @@ import shutil
 import numpy as np
 import pandas as pd
 
-SRC = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/avoid_obstable/aloha_banana_obstacle")
-DST = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/avoid_obstable/aloha_banana_obstacle_gripper_binary")
+SRC = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/three_object/aloha_shape")
+DST_BINARIZE    = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/three_object/three_object_lerobot_binary")
+DST_NO_BINARIZE = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/three_object/three_object_lerobot")
 
-LEFT_GRIPPER_JOINT = 6    # left gripper binarized (always open → OPEN_VAL)
-GRIPPER_JOINT      = 13   # right gripper binarized
-CLOSE_THRESH       = 0.05
-OPEN_VAL           = 0.09
-CLOSE_VAL          = 0.00
+LEFT_GRIPPER_JOINT = 6
+RIGHT_GRIPPER_JOINT = 13
+CLOSE_THRESH = 0.05
+OPEN_VAL     = 0.09
+CLOSE_VAL    = 0.00
 
-NEW_REPO_ID = "local/aloha_banana_obstacle_gripper_binary"
-
-# Video path columns stored in parquet — must be dropped so lerobot
-# decodes frames from the actual video files rather than returning path strings.
 VIDEO_COLS = [
     "observation.images.cam_high",
     "observation.images.cam_left_wrist",
@@ -48,12 +54,8 @@ VIDEO_COLS = [
 
 def binarize_action(action: np.ndarray) -> np.ndarray:
     action = action.copy()
-    action[:, LEFT_GRIPPER_JOINT] = np.where(
-        action[:, LEFT_GRIPPER_JOINT] < CLOSE_THRESH, CLOSE_VAL, OPEN_VAL
-    )
-    action[:, GRIPPER_JOINT] = np.where(
-        action[:, GRIPPER_JOINT] < CLOSE_THRESH, CLOSE_VAL, OPEN_VAL
-    )
+    for j in (LEFT_GRIPPER_JOINT, RIGHT_GRIPPER_JOINT):
+        action[:, j] = np.where(action[:, j] < CLOSE_THRESH, CLOSE_VAL, OPEN_VAL)
     return action
 
 
@@ -78,7 +80,6 @@ def _scalar_stat(arr: np.ndarray) -> dict:
 
 
 def _image_placeholder(shape: list) -> dict:
-    # shape = [H, W, C]; stats use C channel placeholders
     C = shape[2]
     return {
         "min":   [[[0.0]] for _ in range(C)],
@@ -90,7 +91,6 @@ def _image_placeholder(shape: list) -> dict:
 
 
 def _build_episode_stats(df: pd.DataFrame, info_features: dict) -> dict:
-    """Compute per-episode stats in the format lerobot expects."""
     scalar_keys = {"timestamp", "frame_index", "episode_index", "task_index"}
     stats = {}
     for feat, meta in info_features.items():
@@ -105,28 +105,37 @@ def _build_episode_stats(df: pd.DataFrame, info_features: dict) -> dict:
 
 
 def main() -> None:
-    if DST.exists():
-        print(f"[WARN] {DST} already exists, removing...")
-        shutil.rmtree(DST)
-    DST.mkdir(parents=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--binarize", action="store_true",
+                        help="Binarize gripper joints in action (default: keep raw action)")
+    args = parser.parse_args()
 
-    # symlinks for unchanged directories
+    dst = DST_BINARIZE if args.binarize else DST_NO_BINARIZE
+    new_repo_id = "local/" + dst.name
+
+    print(f"Mode     : {'binarize' if args.binarize else 'no binarize (raw action)'}")
+    print(f"SRC      : {SRC}")
+    print(f"DST      : {dst}")
+
+    if dst.exists():
+        print(f"[WARN] {dst} already exists, removing...")
+        shutil.rmtree(dst)
+    dst.mkdir(parents=True)
+
     for name in ("videos", "data_quality", "trajectory_data"):
         src_path = SRC / name
         if src_path.exists():
-            (DST / name).symlink_to(src_path)
+            (dst / name).symlink_to(src_path)
             print(f"Symlinked {name}/")
 
-    # load info.json for stats generation
     info = json.loads((SRC / "meta" / "info.json").read_text())
     info_features = info["features"]
 
-    # copy + patch data/
     src_data = SRC / "data"
-    dst_data = DST / "data"
+    dst_data = dst / "data"
     parquet_files = sorted(src_data.glob("chunk-*/episode_*.parquet"))
     total = len(parquet_files)
-    print(f"\nPatching {total} parquet files...")
+    print(f"\nCopying {total} parquet files...")
 
     episode_stats_lines = []
     for i, src_pf in enumerate(parquet_files):
@@ -136,14 +145,12 @@ def main() -> None:
 
         df = pd.read_parquet(src_pf)
 
-        # patch action
-        action = np.array(df["action"].tolist())
-        df["action"] = list(binarize_action(action))
+        if args.binarize:
+            action = np.array(df["action"].tolist())
+            df["action"] = list(binarize_action(action))
 
-        # drop video path columns (bug fix: prevents path strings overwriting decoded tensors)
         df = df.drop(columns=[c for c in VIDEO_COLS if c in df.columns])
 
-        # collect stats before writing
         ep_idx = int(df["episode_index"].iloc[0])
         stats  = _build_episode_stats(df, info_features)
         episode_stats_lines.append(
@@ -155,33 +162,32 @@ def main() -> None:
         if (i + 1) % 50 == 0 or i == 0:
             print(f"  [{i+1:3d}/{total}]")
 
-    # copy + update meta/
-    dst_meta = DST / "meta"
+    dst_meta = dst / "meta"
     dst_meta.mkdir()
     for src_f in sorted((SRC / "meta").iterdir()):
         dst_f = dst_meta / src_f.name
-
         if src_f.name == "episodes_stats.jsonl":
-            # regenerate in correct lerobot format (bug fix: source has flat layout)
             dst_f.write_text("\n".join(episode_stats_lines) + "\n")
             print("Regenerated meta/episodes_stats.jsonl")
         elif src_f.suffix == ".json":
             data = json.loads(src_f.read_text())
             if src_f.name == "info.json":
-                data["repo_id"] = NEW_REPO_ID
+                data["repo_id"] = new_repo_id
             dst_f.write_text(json.dumps(data, ensure_ascii=False, indent=2))
         else:
             shutil.copy2(src_f, dst_f)
     print("Copied meta/")
 
-    # sanity check
     sample   = dst_data / "chunk-000" / "episode_000000.parquet"
     df_check = pd.read_parquet(sample)
     assert not any(c in df_check.columns for c in VIDEO_COLS), "video cols still present!"
-    vals = np.unique(np.array(df_check["action"].tolist())[:, GRIPPER_JOINT].round(4))
-    print(f"\nSanity check ep0 — joint {GRIPPER_JOINT} unique: {vals}, video cols dropped: OK")
+    if args.binarize:
+        vals = np.unique(np.array(df_check["action"].tolist())[:, RIGHT_GRIPPER_JOINT].round(4))
+        print(f"\nSanity check ep0 — joint {RIGHT_GRIPPER_JOINT} unique: {vals}, video cols dropped: OK")
+    else:
+        print(f"\nSanity check ep0 — video cols dropped: OK")
 
-    print(f"\nDone → {DST}")
+    print(f"\nDone → {dst}")
     print(f"  episodes : {total}")
     print(f"  videos   : symlink → {SRC / 'videos'}")
 

@@ -82,42 +82,43 @@ def check_episode(parquet_path: pathlib.Path) -> list[str]:
     if len(df) < MIN_FRAMES:
         problems.append(f"too short: {len(df)} frames < {MIN_FRAMES}")
 
-    # 3. Active arm frozen  +  4. Frozen individual joints in active arm
+    # 3. Both arms must be active (bimanual task)  +  4. Frozen individual joints per arm
     state_range  = state.max(axis=0) - state.min(axis=0)
     action_range = action.max(axis=0) - action.min(axis=0)
     left_max  = float(state_range[LEFT_ARM_JOINTS].max())
     right_max = float(state_range[RIGHT_ARM_JOINTS].max())
-    active_max = max(left_max, right_max)
 
-    if active_max < ACTIVE_ARM_MIN_RANGE:
+    if left_max < ACTIVE_ARM_MIN_RANGE:
         problems.append(
-            f"active arm frozen: max joint range {active_max:.4f} rad "
-            f"(left_max={left_max:.4f}, right_max={right_max:.4f}) "
+            f"left arm frozen: max joint range {left_max:.4f} rad "
+            f"< threshold {ACTIVE_ARM_MIN_RANGE}"
+        )
+    if right_max < ACTIVE_ARM_MIN_RANGE:
+        problems.append(
+            f"right arm frozen: max joint range {right_max:.4f} rad "
             f"< threshold {ACTIVE_ARM_MIN_RANGE}"
         )
 
-    active_slice = LEFT_ARM_JOINTS if left_max >= right_max else RIGHT_ARM_JOINTS
-    base = active_slice.start
-
-    frozen_state_joints = [
-        base + i for i, r in enumerate(state_range[active_slice])
-        if r < FROZEN_JOINT_THRESHOLD
-    ]
-    frozen_action_joints = [
-        base + i for i, r in enumerate(action_range[active_slice])
-        if r < FROZEN_JOINT_THRESHOLD
-    ]
-
-    if len(frozen_state_joints) > MAX_FROZEN_IN_ACTIVE_ARM:
-        problems.append(
-            f"frozen state joints in active arm: {frozen_state_joints} "
-            f"(range < {FROZEN_JOINT_THRESHOLD} rad)"
-        )
-    if len(frozen_action_joints) > MAX_FROZEN_IN_ACTIVE_ARM:
-        problems.append(
-            f"frozen action joints in active arm: {frozen_action_joints} "
-            f"(range < {FROZEN_JOINT_THRESHOLD} rad)"
-        )
+    for arm_name, arm_slice in [("left", LEFT_ARM_JOINTS), ("right", RIGHT_ARM_JOINTS)]:
+        base = arm_slice.start
+        frozen_state_joints = [
+            base + i for i, r in enumerate(state_range[arm_slice])
+            if r < FROZEN_JOINT_THRESHOLD
+        ]
+        frozen_action_joints = [
+            base + i for i, r in enumerate(action_range[arm_slice])
+            if r < FROZEN_JOINT_THRESHOLD
+        ]
+        if len(frozen_state_joints) > MAX_FROZEN_IN_ACTIVE_ARM:
+            problems.append(
+                f"frozen state joints in {arm_name} arm: {frozen_state_joints} "
+                f"(range < {FROZEN_JOINT_THRESHOLD} rad)"
+            )
+        if len(frozen_action_joints) > MAX_FROZEN_IN_ACTIVE_ARM:
+            problems.append(
+                f"frozen action joints in {arm_name} arm: {frozen_action_joints} "
+                f"(range < {FROZEN_JOINT_THRESHOLD} rad)"
+            )
 
     # 5. Large per-frame jump
     if len(action) > 1:
