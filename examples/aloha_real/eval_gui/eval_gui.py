@@ -38,34 +38,34 @@ _MODE_DESCRIPTIONS = {
     "traj":    "Add Trajectory — manual L/R waypoint annotation by default.",
     "subtask": "Add Subtasks — keys 1-8 override the subtask label.",
     "triple_cot": "Triple-CoT — semi-block task + live subtask + trajectory prompt.",
-    "subgoal": "Add Subgoal Images — ForeAct or GPT generates cam_high subgoal.",
+    "subgoal": "Add Subgoal Images — retrieval, ForeAct, GPT, or video reference generates cam_high subgoal.",
 }
 
 _POLICY_PRESETS = {
     "basic": {
-        "label": "basic - aloha_letter baseline",
-        "config": "pi05_aloha_eai_baseline",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_baseline/eai_baseline/{step}",
+        "label": "basic - aloha_food baseline",
+        "config": "pi05_aloha_food_baseline",
+        "dir": "/home/agilex/agentic-openpi/food/pi05_aloha_food_baseline/{step}",
     },
     "traj": {
-        "label": "traj - aloha_letter trajectory cot",
-        "config": "pi05_aloha_eai_traj",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_traj/eai_traj/{step}",
+        "label": "traj - aloha_food trajectory cot",
+        "config": "pi05_aloha_food_traj",
+        "dir": "/home/agilex/agentic-openpi/food/pi05_aloha_food_traj/{step}",
     },
     "subtask": {
-        "label": "subtask - aloha_letter labels",
-        "config": "pi05_aloha_eai_subtask",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_subtask/eai_subtask/{step}",
+        "label": "subtask - aloha_food labels",
+        "config": "pi05_aloha_food_subtask",
+        "dir": "/home/agilex/agentic-openpi/food/pi05_aloha_food_subtask/{step}",
     },
     "triple_cot": {
-        "label": "triple-cot - aloha_letter all cot",
-        "config": "pi05_aloha_eai_all_cot",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_all_cot/eai_all_cot/{step}",
+        "label": "triple-cot - aloha_food all cot",
+        "config": "pi05_aloha_food_all_cot",
+        "dir": "/home/agilex/agentic-openpi/food/pi05_aloha_food_all_cot/{step}",
     },
     "subgoal": {
-        "label": "subgoal - aloha_letter base camera",
-        "config": "pi05_aloha_eai_subgoal",
-        "dir": "/home/agilex/agentic-openpi/checkpoints/EAI/pi05_aloha_eai_subgoal/eai_subgoal/{step}",
+        "label": "subgoal - aloha_food base camera",
+        "config": "pi05_aloha_food_subgoal",
+        "dir": "/home/agilex/agentic-openpi/food/pi05_aloha_food_subgoal/{step}",
     },
 }
 
@@ -80,7 +80,7 @@ _CHECKPOINT_HISTORY_LIMIT = 30
 _CHECKPOINT_HISTORY_ENV = "AGENTIC_OPENPI_EVAL_GUI_HISTORY"
 _TRAJ_RETRIEVAL_CACHE_ENV = "AGENTIC_OPENPI_TRAJ_RETRIEVAL_CACHE"
 _TRAJ_RETRIEVAL_DATASET_ENV = "AGENTIC_OPENPI_TRAJ_RETRIEVAL_DATASET"
-_DEFAULT_TRAJ_RETRIEVAL_DATASET = _REPO_ROOT / "playground" / "Datasets" / "aloha_letter"
+_DEFAULT_TRAJ_RETRIEVAL_DATASET = _REPO_ROOT / "playground" / "Datasets" / "food"
 
 
 def _np_to_qpixmap(img_hwc_rgb: Optional[np.ndarray], target_w: int, target_h: int) -> QtGui.QPixmap:
@@ -630,6 +630,8 @@ class _EventBridge(QtCore.QObject):
     episode_end = QtCore.pyqtSignal(int)
     manual_trajectory = QtCore.pyqtSignal(object)
     manual_trajectory_cancel = QtCore.pyqtSignal(object)
+    connect_succeeded = QtCore.pyqtSignal(object, int)
+    connect_failed = QtCore.pyqtSignal(str, int)
 
 
 # ---------------------------------------------------------------------------
@@ -640,6 +642,10 @@ class EvalGUI(QtWidgets.QMainWindow):
         self._runtime = runtime
         self._runner: Optional[EvalRunner] = None
         self._handler: Optional[_modes.ModeHandler] = None
+        self._connecting = False
+        self._connect_thread: Optional[threading.Thread] = None
+        self._connect_generation = 0
+        self._start_after_connect = False
         self._policy_proc: Optional[subprocess.Popen] = None
         self._policy_spec: Optional[tuple[str, str, int]] = None
         self._blocking = False
@@ -665,6 +671,8 @@ class EvalGUI(QtWidgets.QMainWindow):
         self._bridge.episode_end.connect(lambda n: self._log_info(f"Episode ended after {n} steps"))
         self._bridge.manual_trajectory.connect(self._on_manual_trajectory_requested)
         self._bridge.manual_trajectory_cancel.connect(self._on_manual_trajectory_cancel)
+        self._bridge.connect_succeeded.connect(self._on_connect_succeeded)
+        self._bridge.connect_failed.connect(self._on_connect_failed)
 
         self.setWindowTitle("Aloha Eval — agentic-openpi")
         self._build_ui()
@@ -787,6 +795,14 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.le_max = QtWidgets.QLineEdit(str(self._cfg.max_steps))
         self.le_max.setFixedWidth(60)
         cfg_row.addWidget(self.le_max)
+        cfg_row.addWidget(QtWidgets.QLabel("ROS wait:"))
+        self.sp_ros_timeout = QtWidgets.QSpinBox()
+        self.sp_ros_timeout.setRange(5, 600)
+        self.sp_ros_timeout.setSingleStep(10)
+        self.sp_ros_timeout.setValue(int(self._cfg.topic_wait_timeout))
+        self.sp_ros_timeout.setSuffix("s")
+        self.sp_ros_timeout.setToolTip("How long Connect waits for all required ROS camera/joint topics.")
+        cfg_row.addWidget(self.sp_ros_timeout)
         left.addLayout(cfg_row)
 
         # Sub-mode (blocking / non-blocking) + step interval
@@ -887,19 +903,38 @@ class EvalGUI(QtWidgets.QMainWindow):
         subgoal_src_row.addWidget(QtWidgets.QLabel("Source:"))
         self.bg_subgoal_source = QtWidgets.QButtonGroup(self)
         self.rb_subgoal_foreact = QtWidgets.QRadioButton("ForeAct Server")
-        self.rb_subgoal_foreact.setChecked(True)
         self.rb_subgoal_gpt = QtWidgets.QRadioButton("GPT Generation")
+        self.rb_subgoal_retrieval = QtWidgets.QRadioButton("Reference Retrieval")
+        self.rb_subgoal_retrieval.setChecked(True)
         self.rb_subgoal_reference = QtWidgets.QRadioButton("Reference Video")
         self.bg_subgoal_source.addButton(self.rb_subgoal_foreact)
         self.bg_subgoal_source.addButton(self.rb_subgoal_gpt)
+        self.bg_subgoal_source.addButton(self.rb_subgoal_retrieval)
         self.bg_subgoal_source.addButton(self.rb_subgoal_reference)
         self.rb_subgoal_gpt.toggled.connect(self._on_subgoal_source_changed)
+        self.rb_subgoal_retrieval.toggled.connect(self._on_subgoal_source_changed)
         self.rb_subgoal_reference.toggled.connect(self._on_subgoal_source_changed)
         subgoal_src_row.addWidget(self.rb_subgoal_foreact)
         subgoal_src_row.addWidget(self.rb_subgoal_gpt)
+        subgoal_src_row.addWidget(self.rb_subgoal_retrieval)
         subgoal_src_row.addWidget(self.rb_subgoal_reference)
         subgoal_src_row.addStretch(1)
         subgoal_source_layout.addLayout(subgoal_src_row)
+
+        retrieval_row = QtWidgets.QHBoxLayout()
+        retrieval_row.addWidget(QtWidgets.QLabel("Retrieval lookahead:"))
+        self.sp_subgoal_retrieval_lookahead = QtWidgets.QSpinBox()
+        self.sp_subgoal_retrieval_lookahead.setRange(0, 10_000)
+        self.sp_subgoal_retrieval_lookahead.setSingleStep(10)
+        self.sp_subgoal_retrieval_lookahead.setValue(60)
+        self.sp_subgoal_retrieval_lookahead.setSuffix(" frames")
+        self.sp_subgoal_retrieval_lookahead.setToolTip(
+            "After matching the current observation to dataset frame n, "
+            "use frame n + this value as the subgoal image."
+        )
+        retrieval_row.addWidget(self.sp_subgoal_retrieval_lookahead)
+        retrieval_row.addStretch(1)
+        subgoal_source_layout.addLayout(retrieval_row)
 
         gpt_key_row = QtWidgets.QHBoxLayout()
         gpt_key_row.addWidget(QtWidgets.QLabel("GPT API Key:"))
@@ -972,6 +1007,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.lbl_subgoal_source_note = QtWidgets.QLabel(
             "ForeAct uses the configured host/port above. "
             "GPT requires a valid API key. "
+            "Reference Retrieval uses the trajectory cache and returns the matched frame + lookahead. "
             "Reference Video pre-extracts frames from a successful evaluation."
         )
         self.lbl_subgoal_source_note.setStyleSheet("color:#888;")
@@ -1281,6 +1317,13 @@ class EvalGUI(QtWidgets.QMainWindow):
                 "cube",
                 "eggplant",
                 "obstacle",
+                "aloha_food",
+                "food",
+                "non-food",
+                "non_food",
+                "plate",
+                "place_all_the_food_into_the_plate",
+                "place_all_the_non-food_items_into_the_plate",
                 "eai",
                 "letter",
                 "stick",
@@ -1291,6 +1334,16 @@ class EvalGUI(QtWidgets.QMainWindow):
             markers.update({"three_object", "aloha_shape", "matching_holes", "shape"})
         if markers & {"aloha_letter", "eai", "letter", "stick"}:
             markers.update({"aloha_letter", "eai", "letter", "stick"})
+        if markers & {
+            "aloha_food",
+            "food",
+            "non-food",
+            "non_food",
+            "plate",
+            "place_all_the_food_into_the_plate",
+            "place_all_the_non-food_items_into_the_plate",
+        }:
+            markers.update({"aloha_food", "food", "non-food", "non_food", "plate"})
         return markers
 
     @staticmethod
@@ -1821,12 +1874,16 @@ class EvalGUI(QtWidgets.QMainWindow):
             kwargs["manual_traj_override"] = self._manual_traj_override_enabled()
             if self._subgoal_use_reference():
                 kwargs["foreact_client"] = self._build_reference_video_client()
+            elif self._subgoal_use_retrieval():
+                kwargs["foreact_client"] = self._build_reference_retrieval_subgoal_client()
             elif self._subgoal_use_gpt():
                 kwargs["foreact_client"] = self._build_gpt_subgoal_client()
         elif mode == "subgoal":
             kwargs["subgoal_step_interval"] = n
             if self._subgoal_use_reference():
                 kwargs["foreact_client"] = self._build_reference_video_client()
+            elif self._subgoal_use_retrieval():
+                kwargs["foreact_client"] = self._build_reference_retrieval_subgoal_client()
             elif self._subgoal_use_gpt():
                 kwargs["foreact_client"] = self._build_gpt_subgoal_client()
         elif mode == "subtask":
@@ -1838,6 +1895,9 @@ class EvalGUI(QtWidgets.QMainWindow):
 
     def _subgoal_use_reference(self) -> bool:
         return bool(getattr(self, "rb_subgoal_reference", None) and self.rb_subgoal_reference.isChecked())
+
+    def _subgoal_use_retrieval(self) -> bool:
+        return bool(getattr(self, "rb_subgoal_retrieval", None) and self.rb_subgoal_retrieval.isChecked())
 
     def _build_gpt_subgoal_client(self):
         from .gpt_subgoal_client import GptSubgoalClient
@@ -1855,6 +1915,23 @@ class EvalGUI(QtWidgets.QMainWindow):
         if custom_prompt:
             client._custom_prompt = custom_prompt
         return client
+
+    def _build_reference_retrieval_subgoal_client(self):
+        from .trajectory_retrieval import TrajectoryReferenceSubgoalClient
+
+        path = self._trajectory_retrieval_cache_path()
+        if path is None:
+            raise ValueError(
+                "Reference Retrieval subgoal requires a trajectory retrieval cache. "
+                "Use the Trajectory annotation cache field or AGENTIC_OPENPI_TRAJ_RETRIEVAL_CACHE."
+            )
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Reference Retrieval subgoal cache not found: {path}. "
+                "Build it with tools/trajectory/build_trajectory_retrieval_cache.py."
+            )
+        lookahead = int(self.sp_subgoal_retrieval_lookahead.value())
+        return TrajectoryReferenceSubgoalClient(path, lookahead_frames=lookahead)
 
     def _build_reference_video_client(self):
         from .reference_video_provider import ReferenceVideoProvider
@@ -2102,9 +2179,11 @@ class EvalGUI(QtWidgets.QMainWindow):
         self.gb_subgoal_source.setEnabled(visible)
         if visible:
             gpt_selected = self.rb_subgoal_gpt.isChecked()
+            retrieval_selected = self._subgoal_use_retrieval()
             ref_selected = self._subgoal_use_reference()
             self.le_gpt_api_key.setEnabled(gpt_selected)
             self.le_gpt_prompt.setEnabled(gpt_selected)
+            self.sp_subgoal_retrieval_lookahead.setEnabled(retrieval_selected)
             self.le_ref_video_path.setEnabled(ref_selected)
             self.btn_browse_ref_video.setEnabled(ref_selected)
             self.sp_ref_video_offset.setEnabled(ref_selected)
@@ -2112,15 +2191,19 @@ class EvalGUI(QtWidgets.QMainWindow):
 
     def _on_subgoal_source_changed(self, _toggled: bool) -> None:
         gpt_selected = self.rb_subgoal_gpt.isChecked()
+        retrieval_selected = self._subgoal_use_retrieval()
         ref_selected = self._subgoal_use_reference()
         self.le_gpt_api_key.setEnabled(gpt_selected)
         self.le_gpt_prompt.setEnabled(gpt_selected)
+        self.sp_subgoal_retrieval_lookahead.setEnabled(retrieval_selected)
         self.le_ref_video_path.setEnabled(ref_selected)
         self.btn_browse_ref_video.setEnabled(ref_selected)
         self.sp_ref_video_offset.setEnabled(ref_selected)
         self.sp_ref_control_hz.setEnabled(ref_selected)
         if ref_selected:
             source = "Reference Video"
+        elif retrieval_selected:
+            source = "Reference Retrieval"
         elif gpt_selected:
             source = "GPT Generation"
         else:
@@ -2140,6 +2223,20 @@ class EvalGUI(QtWidgets.QMainWindow):
         if self._handler is not None:
             self._handler.set_step_interval(n)
 
+    def _set_connect_button_state(self, state: str) -> None:
+        if state == "connecting":
+            self.btn_connect.setEnabled(False)
+            self.btn_connect.setText("Connecting...")
+        elif state == "connected":
+            self.btn_connect.setEnabled(False)
+            self.btn_connect.setText("Connected")
+        elif state == "retry":
+            self.btn_connect.setEnabled(True)
+            self.btn_connect.setText("Retry Connect")
+        else:
+            self.btn_connect.setEnabled(True)
+            self.btn_connect.setText("Connect")
+
     def _set_subtask(self, key: int) -> None:
         with self._runtime._lock:
             labels = dict(self._runtime.subtask_labels)
@@ -2156,23 +2253,93 @@ class EvalGUI(QtWidgets.QMainWindow):
         if self._runner is not None:
             self._log_info("Already connected.")
             return
+        if self._connecting:
+            self._log_info("Connection already in progress.")
+            return
         try:
+            self._on_task_edited()
             self._cfg.host = self.le_host.text().strip() or "127.0.0.1"
             self._cfg.port = int(self.le_port.text())
             self._cfg.action_horizon = int(self.le_chunk.text())
             self._cfg.max_steps = int(self.le_max.text())
+            self._cfg.topic_wait_timeout = float(self.sp_ros_timeout.value())
             if self.cb_local_policy.isChecked():
                 self._start_policy_server_if_needed()
                 self._cfg.host = "127.0.0.1"
                 self.le_host.setText(self._cfg.host)
             self._handler = self._build_handler(self._runtime.mode)
-            self._runner = EvalRunner(self._cfg, self._runtime, self._handler, on_event=self._on_event)
-            self._runner.connect()
-            self._log_info("Connected.")
         except Exception as e:                           # noqa: BLE001
-            logger.exception("connect failed")
-            self._log_error(f"connect failed: {e}")
+            logger.exception("connect setup failed")
+            self._log_error(f"connect setup failed: {e}")
+            self._start_after_connect = False
             self._runner = None
+            self._handler = None
+            self._set_connect_button_state("retry")
+            return
+
+        runner = EvalRunner(self._cfg, self._runtime, self._handler, on_event=self._on_event)
+        self._connecting = True
+        self._connect_generation += 1
+        generation = self._connect_generation
+        self._set_connect_button_state("connecting")
+        self._log_info(
+            f"Connecting in background; ROS topic wait timeout={self._cfg.topic_wait_timeout:.0f}s."
+        )
+
+        def _connect_worker() -> None:
+            try:
+                runner.connect()
+            except Exception as e:                       # noqa: BLE001
+                logger.exception("connect failed")
+                try:
+                    runner.stop()
+                except Exception as stop_err:            # noqa: BLE001
+                    logger.warning("cleanup after connect failure failed: %s", stop_err)
+                self._bridge.connect_failed.emit(str(e), generation)
+            else:
+                self._bridge.connect_succeeded.emit(runner, generation)
+
+        self._connect_thread = threading.Thread(
+            target=_connect_worker,
+            daemon=True,
+            name="eval-connect",
+        )
+        self._connect_thread.start()
+
+    @QtCore.pyqtSlot(object, int)
+    def _on_connect_succeeded(self, runner: EvalRunner, generation: int) -> None:
+        if generation != self._connect_generation:
+            try:
+                runner.stop()
+            except Exception as e:                       # noqa: BLE001
+                logger.warning("stale runner cleanup failed: %s", e)
+            return
+        self._runner = runner
+        self._connecting = False
+        self._connect_thread = None
+        self._set_connect_button_state("connected")
+        self._log_info("Connected.")
+        if self._start_after_connect:
+            self._start_after_connect = False
+            self._start_runner()
+
+    @QtCore.pyqtSlot(str, int)
+    def _on_connect_failed(self, message: str, generation: int) -> None:
+        if generation != self._connect_generation:
+            return
+        self._runner = None
+        self._handler = None
+        self._connecting = False
+        self._connect_thread = None
+        self._start_after_connect = False
+        self._set_connect_button_state("retry")
+        self._log_error(f"connect failed: {message}")
+
+    def _start_runner(self) -> None:
+        if self._runner is None:
+            return
+        self._runner.start()
+        self._log_info("Run loop started.")
 
     def _on_start(self) -> None:
         if not self._configure_video_recording():
@@ -2180,10 +2347,12 @@ class EvalGUI(QtWidgets.QMainWindow):
         if self._runtime.mode in _TRAJECTORY_SOURCE_MODES:
             self._prepare_trajectory_retriever(warn_missing=True)
         if self._runner is None:
+            self._start_after_connect = True
             self._on_connect()
-        if self._runner is not None:
-            self._runner.start()
-            self._log_info("Run loop started.")
+            if self._connecting:
+                self._log_info("Start queued; run loop will begin after connection succeeds.")
+            return
+        self._start_runner()
 
     def _on_pause_toggle(self) -> None:
         if self._runner is None:
@@ -2203,6 +2372,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         self._runner.stop()
         self._runner = None
         self._handler = None
+        self._set_connect_button_state("idle")
         # Clear all UI display fields so stale info is not shown.
         self.lbl_prompt.setText("(idle)")
         self.lbl_subtask.setText("-")
@@ -2333,6 +2503,9 @@ class EvalGUI(QtWidgets.QMainWindow):
 
     def closeEvent(self, event) -> None:                             # noqa: N802
         try:
+            self._connect_generation += 1
+            self._connecting = False
+            self._start_after_connect = False
             app = QtWidgets.QApplication.instance()
             if app is not None:
                 app.removeEventFilter(self)
@@ -2350,7 +2523,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Aloha eval GUI")
     p.add_argument(
         "--mode",
-        default="basic",
+        default="subtask",
         choices=["basic", "traj", "subtask", "triple_cot", "triple-cot", "subgoal"],
     )
     p.add_argument("--task", default=_modes.DEFAULT_TASK_PROMPT)
@@ -2358,6 +2531,13 @@ def main() -> None:
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--action_horizon", type=int, default=25)
     p.add_argument("--max_steps", type=int, default=2000)
+    p.add_argument(
+        "--topic_wait_timeout",
+        "--topic-wait-timeout",
+        dest="topic_wait_timeout",
+        type=float,
+        default=120.0,
+    )
     p.add_argument("--dry_run", action="store_true")
     p.add_argument("--dump_dir", default="debug_inputs")
     p.add_argument("--log", default="INFO")
@@ -2371,6 +2551,7 @@ def main() -> None:
         port=args.port,
         action_horizon=args.action_horizon,
         max_steps=args.max_steps,
+        topic_wait_timeout=args.topic_wait_timeout,
         dry_run=args.dry_run,
         dump_dir=args.dump_dir,
     )

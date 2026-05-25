@@ -18,6 +18,7 @@ import json
 import logging
 import pathlib
 import re
+import threading
 import time
 from typing import Any
 
@@ -49,6 +50,7 @@ class RetrievalResult:
     frame_index: int
     search_ms: float
     cache_path: str
+    video_path: str
 
 
 class LightweightImageEmbedder:
@@ -213,7 +215,102 @@ class TrajectoryReferenceRetriever:
             frame_index=int(ref.get("frame_index", -1)),
             search_ms=elapsed_ms,
             cache_path=str(self.cache_path),
+            video_path=str(ref.get("video_path", "")),
         )
+
+
+class TrajectoryReferenceSubgoalClient:
+    """Subgoal client that returns the retrieved dataset frame at ``n + offset``.
+
+    It reuses the same image-embedding cache as trajectory auto-suggest. Given
+    the current live camera frame, it finds the nearest cached dataset frame
+    ``n`` and then returns frame ``n + lookahead_frames`` from the matched
+    episode's main-camera video. The returned image is HxWx3 uint8 RGB, matching
+    the ``ForeactClient.predict_subgoal`` contract used by ``SubgoalMode``.
+    """
+
+    def __init__(
+        self,
+        cache_path: str | pathlib.Path,
+        *,
+        lookahead_frames: int = 60,
+        device: str = "cpu",
+    ) -> None:
+        self.cache_path = pathlib.Path(cache_path).expanduser()
+        self.lookahead_frames = max(0, int(lookahead_frames))
+        self._retriever = TrajectoryReferenceRetriever(self.cache_path, device=device)
+        self._lock = threading.Lock()
+        self._last_result: RetrievalResult | None = None
+        self._last_target_frame_index = -1
+
+    def connect(self) -> dict[str, Any]:
+        return {
+            "client": "trajectory_reference_subgoal",
+            "cache_path": str(self.cache_path),
+            "frames": self._retriever.count,
+            "lookahead_frames": self.lookahead_frames,
+        }
+
+    def close(self) -> None:
+        pass
+
+    def reset(self) -> None:
+        with self._lock:
+            self._last_result = None
+            self._last_target_frame_index = -1
+
+    def predict_subgoal(
+        self,
+        image: np.ndarray,
+        task_description: str,
+    ) -> np.ndarray | None:
+        del task_description
+        result = self._retriever.suggest(image)
+        if result is None:
+            return None
+
+        target_frame = max(0, int(result.frame_index) + self.lookahead_frames)
+        video_path = self._resolve_video_path(result.video_path)
+        if video_path is None:
+            logger.warning(
+                "Reference subgoal match has no valid video path: episode=%s frame=%s",
+                result.episode_index,
+                result.frame_index,
+            )
+            return None
+
+        started = time.perf_counter()
+        subgoal = _read_video_frame_rgb(video_path, target_frame)
+        total_ms = (time.perf_counter() - started) * 1000.0 + result.search_ms
+        if subgoal is None:
+            return None
+
+        with self._lock:
+            self._last_result = result
+            self._last_target_frame_index = target_frame
+
+        logger.info(
+            "Reference subgoal suggested from episode %06d frame %d -> %d "
+            "(score=%.3f, total=%.1f ms)",
+            result.episode_index,
+            result.frame_index,
+            target_frame,
+            result.score,
+            total_ms,
+        )
+        if total_ms > 1000.0:
+            logger.warning("Reference subgoal retrieval took %.1f ms (>1s target)", total_ms)
+        return _resize_like(subgoal, image)
+
+    def _resolve_video_path(self, video_path: str) -> pathlib.Path | None:
+        if not video_path:
+            return None
+        path = pathlib.Path(video_path).expanduser()
+        if not path.is_absolute():
+            dataset_root = self._retriever.metadata.get("dataset_root", "")
+            if dataset_root:
+                path = pathlib.Path(str(dataset_root)).expanduser() / path
+        return path if path.exists() else None
 
 
 def default_cache_path(dataset_root: str | pathlib.Path) -> pathlib.Path:
@@ -476,6 +573,43 @@ def _iter_video_frames(video_path: pathlib.Path):
             yield frame_index, frame.to_ndarray(format="rgb24")
 
 
+def _read_video_frame_rgb(video_path: pathlib.Path, frame_index: int) -> np.ndarray | None:
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        logger.warning("Cannot open reference subgoal video: %s", video_path)
+        return None
+    try:
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames > 0:
+            frame_index = min(max(0, int(frame_index)), total_frames - 1)
+        else:
+            frame_index = max(0, int(frame_index))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+        ok, frame_bgr = cap.read()
+        if not ok and total_frames > 0 and frame_index != total_frames - 1:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, total_frames - 1)
+            ok, frame_bgr = cap.read()
+        if not ok:
+            logger.warning("Could not read reference subgoal frame %d from %s", frame_index, video_path)
+            return None
+        return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    finally:
+        cap.release()
+
+
+def _resize_like(image_hwc_rgb: np.ndarray, reference_hwc_rgb: np.ndarray) -> np.ndarray:
+    image = _as_hwc_uint8_rgb(image_hwc_rgb)
+    reference = _as_hwc_uint8_rgb(reference_hwc_rgb)
+    if image.shape[:2] == reference.shape[:2]:
+        return image
+    resized = cv2.resize(
+        image,
+        (int(reference.shape[1]), int(reference.shape[0])),
+        interpolation=cv2.INTER_AREA,
+    )
+    return np.ascontiguousarray(resized, dtype=np.uint8)
+
+
 def _maybe_tqdm(items, *, enabled: bool, desc: str):
     if not enabled:
         return items
@@ -492,6 +626,7 @@ __all__ = [
     "DEFAULT_TRAJ_COLUMN",
     "LightweightImageEmbedder",
     "RetrievalResult",
+    "TrajectoryReferenceSubgoalClient",
     "TrajectoryReferenceRetriever",
     "build_retrieval_cache",
     "default_cache_path",

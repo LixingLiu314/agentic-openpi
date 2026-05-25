@@ -1,7 +1,7 @@
 # Aloha Eval GUI
 
-A unified PyQt5 evaluation pipeline for the `aloha_letter` / EAI
-`pi05_aloha_eai_*` policies.
+A unified PyQt5 evaluation pipeline for the `aloha_food`
+`pi05_aloha_food_*` policies.
 One window, one task field, one mode dropdown — the backend swaps the right
 pre-processing (subtask label / Doubao trajectory / ForeAct subgoal image) so
 the on-wire observation matches what the **training** repack transforms produced.
@@ -10,11 +10,11 @@ the on-wire observation matches what the **training** repack transforms produced
 
 | GUI Mode  | Training config                            | What the client adds to the obs                                              |
 |-----------|--------------------------------------------|------------------------------------------------------------------------------|
-| `basic`   | `pi05_aloha_eai_baseline`                  | nothing — `prompt = task`                                                    |
-| `traj`    | `pi05_aloha_eai_traj`                      | `prompt = "{task}, traj: Left: Go along ... Right: Go along ..."`            |
-| `subtask` | `pi05_aloha_eai_subtask`                   | `prompt = "{task}, subtask: {label}"`; label chosen from the subtask list    |
-| `triple_cot` | `pi05_aloha_eai_all_cot`                | prompt includes task + subtask + trajectory; may include subgoal image       |
-| `subgoal` | `pi05_aloha_eai_subgoal`                   | `subgoal_images = {"cam_high": HxWx3 uint8}` from ForeAct                    |
+| `basic`   | `pi05_aloha_food_baseline`                 | nothing — `prompt = task`                                                    |
+| `traj`    | `pi05_aloha_food_traj`                     | `prompt = "{task}, traj: Left: Go along ... Right: Go along ..."`            |
+| `subtask` | `pi05_aloha_food_subtask`                  | `prompt = "{task}, subtask: {label}"`; label chosen from the subtask list    |
+| `triple_cot` | `pi05_aloha_food_all_cot`               | prompt includes task + subtask + trajectory; may include subgoal image       |
+| `subgoal` | `pi05_aloha_food_subgoal`                  | `subgoal_images = {"cam_high": HxWx3 uint8}` from ForeAct                    |
 
 ### Policy checkpoint selection
 
@@ -23,11 +23,11 @@ the matching `policy.config`:
 
 | GUI Mode  | Auto-selected `policy.config`              |
 |-----------|--------------------------------------------|
-| `basic`   | `pi05_aloha_eai_baseline`                  |
-| `traj`    | `pi05_aloha_eai_traj`                      |
-| `subtask` | `pi05_aloha_eai_subtask`                   |
-| `triple_cot` | `pi05_aloha_eai_all_cot`                |
-| `subgoal` | `pi05_aloha_eai_subgoal`                   |
+| `basic`   | `pi05_aloha_food_baseline`                 |
+| `traj`    | `pi05_aloha_food_traj`                     |
+| `subtask` | `pi05_aloha_food_subtask`                  |
+| `triple_cot` | `pi05_aloha_food_all_cot`               |
+| `subgoal` | `pi05_aloha_food_subgoal`                  |
 
 The checkpoint field is an editable dropdown. You can type a `policy.dir`, pick
 one from the dropdown, use the step spinbox to generate the default checkpoint
@@ -59,7 +59,7 @@ and then runs the **same** `coords_to_loc_tokens` regex used by
 `<locXXXX>` tokens. End-to-end the prompt becomes e.g.
 
 ```
-Construct the letters "EAI" using sticks, traj: Left: Go along <loc0000><loc0554>.
+place_all_the_food_into_the_plate, traj: Left: Go along <loc0000><loc0554>.
 Right: Go along <loc0980><loc0627>, <loc1000><loc0533>, close gripper, <loc0714><loc0271>
 ```
 
@@ -92,14 +92,14 @@ Instead, you build a cache once:
 
 ```bash
 python tools/trajectory/build_trajectory_retrieval_cache.py \
-    --dataset-root playground/Datasets/aloha_letter \
+    --dataset-root playground/Datasets/food \
     --overwrite
 ```
 
 By default this writes:
 
 ```
-playground/Datasets/aloha_letter/trajectory_data/cam_high_traj_reference_cache.pt
+playground/Datasets/food/trajectory_data/cam_high_traj_reference_cache.pt
 ```
 
 The cache contains:
@@ -114,10 +114,10 @@ At evaluation time, set either the GUI cache field or an environment variable:
 ```bash
 export AGENTIC_OPENPI_TRAJ_RETRIEVAL_CACHE=/path/to/cam_high_traj_reference_cache.pt
 # or:
-export AGENTIC_OPENPI_TRAJ_RETRIEVAL_DATASET=playground/Datasets/aloha_letter
+export AGENTIC_OPENPI_TRAJ_RETRIEVAL_DATASET=playground/Datasets/food
 ```
 
-When `playground/Datasets/aloha_letter` exists in this repo, the GUI uses its
+When `playground/Datasets/food` exists in this repo, the GUI uses its
 default cache path automatically if neither environment variable is set.
 
 When the trajectory dialog opens, the GUI encodes the current live `cam_high`
@@ -127,6 +127,21 @@ and uses the Top-1 matched frame's GT trajectory as the default text. Press
 trajectory. The dialog log includes the matched episode/frame, score, and
 search latency; the intended runtime path is comfortably below 1 second because
 all dataset embeddings are already resident in memory.
+
+### Auto-suggest subgoal images
+
+Subgoal Mode and Triple-CoT can also use the same retrieval cache to suggest a
+subgoal image. Choose **Reference Retrieval** in the subgoal source panel. At
+runtime the client:
+
+1. encodes the current live `cam_high` frame;
+2. finds the Top-1 matching dataset frame `n` in the trajectory cache;
+3. decodes frame `n + 60` from the matched episode's `cam_high` video;
+4. sends that RGB frame as `subgoal_images["cam_high"]`.
+
+The `Retrieval lookahead` spinbox controls the `+60` offset. The default is
+60 frames. The embedding search is shared with trajectory auto-suggest; only
+one target video frame is decoded per refresh.
 
 ### Sub-modes (modes 2 / 3 / 4)
 
@@ -148,7 +163,7 @@ active key again counts as confirmation.
 
 ### Subtask labels (Mode 3)
 
-* Default key on init = **1**, with the canonical EAI stick-placement labels
+* Default key on init = **1**, with the canonical food placement labels
   pre-populated.
 * Labels are **editable** in-place (just type & Enter).
 * Click **Add** to append a new subtask field. Click **Remove** to remove the
@@ -183,7 +198,7 @@ missing video spans. File names include the selected checkpoint name and a
 timestamp, for example:
 
 ```
-test_video/eai_subtask_5000_20260507_102100.mp4
+test_video/pi05_aloha_food_subtask_5000_20260507_102100.mp4
 ```
 
 Videos are encoded as H.264 MP4 with `yuv420p` pixels and `+faststart`, so they
@@ -192,8 +207,8 @@ can be opened directly in VS Code and browser-based players.
 Each run also writes an append-only VLA input log next to the video:
 
 ```
-test_video/eai_subtask_5000_20260507_102100_log.jsonl
-test_video/eai_subtask_5000_20260507_102100_step_00000_subgoal.jpg
+test_video/pi05_aloha_food_subtask_5000_20260507_102100_log.jsonl
+test_video/pi05_aloha_food_subtask_5000_20260507_102100_step_00000_subgoal.jpg
 ```
 
 The JSONL file has one entry per actual VLA server inference request. Each
@@ -236,7 +251,7 @@ only for hardware calibration/debugging.
 bash scripts/start_aloha_eval_gui.sh \
     --mode subtask \
     --host 127.0.0.1 --port 8000 \
-    --task 'Construct the letters "EAI" using sticks'
+    --task place_all_the_food_into_the_plate
 ```
 
 ## Keyboard shortcuts

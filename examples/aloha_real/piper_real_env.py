@@ -79,7 +79,8 @@ class PiperRealEnv:
         gripper_open:  float = DEFAULT_GRIPPER_OPEN,
         gripper_close: float = DEFAULT_GRIPPER_CLOSE,
         reset_move_time: float = 2.0,
-        topic_wait_timeout: float = 30.0,
+        topic_wait_timeout: float = 120.0,
+        ros_disable_signals: bool = False,
         dry_run: bool = False,
     ):
         self._reset_position  = list(reset_position[:6]) if reset_position else DEFAULT_RESET_POSITION
@@ -96,21 +97,38 @@ class PiperRealEnv:
         self._img_right: Optional[np.ndarray] = None
         self._js_left:   Optional[JointState]  = None
         self._js_right:  Optional[JointState]  = None
+        self._topic_names = {
+            "cam_high": img_front_topic,
+            "cam_left_wrist": img_left_topic,
+            "cam_right_wrist": img_right_topic,
+            "puppet_left_js": joint_left_topic,
+            "puppet_right_js": joint_right_topic,
+        }
+        self._subscribers = []
+        self._publishers = []
 
-        if init_node:
-            rospy.init_node("piper_real_env", anonymous=True)
+        if init_node and not rospy.core.is_initialized():
+            disable_signals = bool(ros_disable_signals) or threading.current_thread() is not threading.main_thread()
+            rospy.init_node("piper_real_env", anonymous=True, disable_signals=disable_signals)
 
-        rospy.Subscriber(img_front_topic,   Image,      self._cb_img_high,  queue_size=1, tcp_nodelay=True)
-        rospy.Subscriber(img_left_topic,    Image,      self._cb_img_left,  queue_size=1, tcp_nodelay=True)
-        rospy.Subscriber(img_right_topic,   Image,      self._cb_img_right, queue_size=1, tcp_nodelay=True)
-        rospy.Subscriber(joint_left_topic,  JointState, self._cb_jsl,       queue_size=1, tcp_nodelay=True)
-        rospy.Subscriber(joint_right_topic, JointState, self._cb_jsr,       queue_size=1, tcp_nodelay=True)
+        self._subscribers = [
+            rospy.Subscriber(img_front_topic,   Image,      self._cb_img_high,  queue_size=1, tcp_nodelay=True),
+            rospy.Subscriber(img_left_topic,    Image,      self._cb_img_left,  queue_size=1, tcp_nodelay=True),
+            rospy.Subscriber(img_right_topic,   Image,      self._cb_img_right, queue_size=1, tcp_nodelay=True),
+            rospy.Subscriber(joint_left_topic,  JointState, self._cb_jsl,       queue_size=1, tcp_nodelay=True),
+            rospy.Subscriber(joint_right_topic, JointState, self._cb_jsr,       queue_size=1, tcp_nodelay=True),
+        ]
 
         self._pub_left  = rospy.Publisher(cmd_left_topic,  JointState, queue_size=10)
         self._pub_right = rospy.Publisher(cmd_right_topic, JointState, queue_size=10)
+        self._publishers = [self._pub_left, self._pub_right]
 
         rospy.loginfo("[PiperRealEnv] Waiting for all topics (timeout=%.0fs)...", topic_wait_timeout)
-        self._wait_for_topics(timeout=topic_wait_timeout)
+        try:
+            self._wait_for_topics(timeout=topic_wait_timeout)
+        except Exception:
+            self.close()
+            raise
         rospy.loginfo("[PiperRealEnv] All topics ready.")
 
     # ------------------------------------------------------------------ #
@@ -147,18 +165,51 @@ class PiperRealEnv:
             self._js_left, self._js_right,
         ))
 
-    def _wait_for_topics(self, timeout: float = 30.0) -> None:
+    def _missing_topics(self) -> List[str]:
+        with self._lock:
+            missing = []
+            if self._img_high is None:
+                missing.append(f"cam_high={self._topic_names['cam_high']}")
+            if self._img_left is None:
+                missing.append(f"cam_left_wrist={self._topic_names['cam_left_wrist']}")
+            if self._img_right is None:
+                missing.append(f"cam_right_wrist={self._topic_names['cam_right_wrist']}")
+            if self._js_left is None:
+                missing.append(f"puppet_left_js={self._topic_names['puppet_left_js']}")
+            if self._js_right is None:
+                missing.append(f"puppet_right_js={self._topic_names['puppet_right_js']}")
+        return missing
+
+    def _wait_for_topics(self, timeout: float = 120.0) -> None:
         deadline = time.time() + timeout
         while not rospy.is_shutdown():
             if self._all_ready():
                 return
             if time.time() > deadline:
+                missing = ", ".join(self._missing_topics()) or "unknown"
                 raise RuntimeError(
-                    "[PiperRealEnv] Timed out waiting for ROS topics. "
+                    f"[PiperRealEnv] Timed out waiting for ROS topics after {timeout:.0f}s. "
+                    f"Missing: {missing}. "
                     "Check that the robot stack is running: "
                     "bash examples/Aloha/eval_files/start_robot_stack.sh --validate-only"
                 )
             time.sleep(0.05)
+        missing = ", ".join(self._missing_topics()) or "unknown"
+        raise RuntimeError(f"[PiperRealEnv] ROS shutdown while waiting for topics. Missing: {missing}.")
+
+    def close(self) -> None:
+        for sub in self._subscribers:
+            try:
+                sub.unregister()
+            except Exception:
+                pass
+        self._subscribers = []
+        for pub in self._publishers:
+            try:
+                pub.unregister()
+            except Exception:
+                pass
+        self._publishers = []
 
     def _snapshot(self):
         """Atomically copy all sensor data to avoid cross-field timestamp skew."""

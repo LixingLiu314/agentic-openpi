@@ -68,12 +68,13 @@ logger = logging.getLogger(__name__)
 #     3: "Move the cuboid on the hole",
 #     4: "Put the cuboid in the hole"
 # }
-DEFAULT_TASK_PROMPT = 'Construct the letters "EAI" using sticks'
+DEFAULT_TASK_PROMPT = "place_all_the_food_into_the_plate"
 
 DEFAULT_SUBTASK_LABELS: Dict[int, str] = {
-    1: "construct letter 'E'",
-    2: "construct letter 'A'",
-    3: "construct letter 'I'",
+    1: "reach for food on the table",
+    2: "grasp the food",
+    3: "move food to the plate",
+    4: "release the food",
 }
 
 def to_chw_uint8(img_hwc_rgb: np.ndarray, h: int = 224, w: int = 224) -> np.ndarray:

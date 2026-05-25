@@ -58,6 +58,7 @@ class RunnerConfig:
     joint_right_topic: str = "/puppet/joint_right"
     cmd_left_topic: str = "/master/joint_left"
     cmd_right_topic: str = "/master/joint_right"
+    topic_wait_timeout: float = 120.0
     gripper_open: float = 4.0
     gripper_close: float = 0.0
     reset_move_time: float = 2.0
@@ -749,6 +750,8 @@ class EvalRunner:
             joint_right_topic=self._cfg.joint_right_topic,
             cmd_left_topic=self._cfg.cmd_left_topic,
             cmd_right_topic=self._cfg.cmd_right_topic,
+            topic_wait_timeout=self._cfg.topic_wait_timeout,
+            ros_disable_signals=True,
             gripper_open=self._cfg.gripper_open,
             gripper_close=self._cfg.gripper_close,
             reset_move_time=self._cfg.reset_move_time,
@@ -798,6 +801,11 @@ class EvalRunner:
         if self._thread is not None:
             self._thread.join(timeout=5.0)
         self._stop_active_artifacts()
+        if self._thread is None or not self._thread.is_alive():
+            self._close_env()
+            self._thread = None
+        else:
+            self._on_event("error", {"msg": "Run loop did not stop within 5s; ROS env left open."})
         # ---- full state clear so the next Start is a clean run ---- #
         self._step_count = 0
         with self._handler_lock:
@@ -812,6 +820,20 @@ class EvalRunner:
             self._latest_model_raw_obs = None
             self._latest_model_inference_index = -1
             self._latest_model_frame_index = None
+
+    def _close_env(self) -> None:
+        env = self._env
+        self._env = None
+        if env is None:
+            return
+        close = getattr(env, "close", None)
+        if not callable(close):
+            return
+        try:
+            with self._env_lock:
+                close()
+        except Exception as e:                       # noqa: BLE001
+            logger.warning("ROS env close failed: %s", e)
 
     # ------------------------------------------------------------------ #
     # Return-to-Zero — mirrors `scripts/eval_banana.sh --reset-only` which in
