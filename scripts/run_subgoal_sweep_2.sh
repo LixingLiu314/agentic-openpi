@@ -59,26 +59,27 @@ else
 fi
 
 # ── Experiment 1: trajectory COT ────────────────────────────────
-run_exp 1 "obstacle_baseline" \
-    pi05_aloha_obstacle_baseline \
+run_exp 1 "three_object_baseline" \
+    pi05_aloha_three_object_baseline \
     --debug_steps 5
 
-# ── Experiment 2: subgoal base camera only ─────────────────────
-run_exp 2 "obstacle_subtask" \
-    pi05_aloha_obstacle_subtask \
+run_exp 2 "three_object_traj" \
+    pi05_aloha_three_object_traj \
     --debug_steps 5
 
-run_exp 3 "obstacle_traj" \
-    pi05_aloha_obstacle_traj \
+run_exp 3 "three_object_all_cot" \
+    pi05_aloha_three_object_all_cot \
     --debug_steps 5
 
-run_exp 4 "obstacle_subgoal" \
-    pi05_aloha_obstacle_subgoal \
-    --debug_steps 5
 
-run_exp 5 "obstacle_all_cot" \
-    pi05_aloha_obstacle_all_cot \
-    --debug_steps 5
+
+# run_exp 4 "eai_subgoal" \
+#     pi05_aloha_eai_subgoal \
+#     --debug_steps 5
+
+# run_exp 5 "eai_all_cot" \
+#     pi05_aloha_eai_all_cot \
+#     --debug_steps 5
 
 echo ""
 echo "All subgoal experiments finished: $(date '+%Y-%m-%d %H:%M:%S')"
