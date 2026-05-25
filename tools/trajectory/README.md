@@ -166,6 +166,89 @@ playground/Datasets/<dataset_name>/trajectory_data/visualizations_all
 
 The batch renderer writes `render_report.json` with success/failure details.
 
+## Visualize Prompt Trajectory Points
+
+Use this when debugging traj/triple-cot annotation quality. Unlike the FK
+trajectory videos above, this renderer parses the actual sparse points inside
+`cot_text_prompts.json` or a parquet `traj_cot` column, then overlays only the
+prompt points and gripper events that are fed to the model.
+
+For `aloha_letter`, render the frames where trajectory annotation is expected
+in eval (`N=60` by default):
+
+```bash
+python tools/trajectory/visualize_traj_prompt_points.py \
+  --dataset-path playground/Datasets/aloha_letter \
+  --episode 0 \
+  --update-every 60 \
+  --frame-policy direct-window
+```
+
+Default output:
+
+```text
+playground/Datasets/aloha_letter/trajectory_data/prompt_point_visualizations/
+  episode_000000_direct-window/
+    episode_000000_frame_000000_prompt_000000.png
+    episode_000000_frame_000060_prompt_000060.png
+    ...
+    episode_000000_prompt_points_sheet.jpg
+    prompt_point_report.json
+```
+
+To visualize the prompt that the current GUI semi-blocking trajectory pipeline
+actually applies to each current frame, including the one-window lag, use:
+
+```bash
+python tools/trajectory/visualize_traj_prompt_points.py \
+  --dataset-path playground/Datasets/aloha_letter \
+  --episode 0 \
+  --frames 0 60 120 180 \
+  --frame-policy eval-blocking
+```
+
+In `eval-blocking`, frame `60` still uses prompt frame `0`, frame `120` uses
+prompt frame `60`, and so on. This is useful for checking whether stale
+trajectory prompts are hurting triple-cot behavior.
+
+If a dataset already has the training-time `traj_cot` column, force exact
+parquet prompt visualization with:
+
+```bash
+python tools/trajectory/visualize_traj_prompt_points.py \
+  --dataset-path playground/Datasets/<dataset_name> \
+  --episode 0 \
+  --prompt-source parquet \
+  --traj-column traj_cot
+```
+
+Add `--render-video` to write an MP4 overlay for the full episode, or use
+`--show-prompt-text` to include the raw prompt text at the bottom of each
+rendered image.
+
+To render all prompt-point overlay videos, mirroring `visualizations_all`:
+
+```bash
+python tools/trajectory/visualize_all_traj_prompt_points.py \
+  --dataset-path playground/Datasets/aloha_letter \
+  --update-every 60 \
+  --frame-policy direct-window \
+  --num-workers 4
+```
+
+Default output:
+
+```text
+playground/Datasets/aloha_letter/trajectory_data/prompt_point_visualizations_all/direct-window/
+  episode_000000_direct-window_prompt_points.mp4
+  episode_000001_direct-window_prompt_points.mp4
+  ...
+  render_report.json
+```
+
+Use `--frame-policy eval-blocking` if you want every rendered frame to show the
+same one-window-lag prompt used by the current GUI trajectory pipeline.
+
 ## Debug Single-Episode Projection
 
 Use this when checking a calibration quickly:
