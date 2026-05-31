@@ -35,9 +35,9 @@ import shutil
 import numpy as np
 import pandas as pd
 
-SRC = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/three_object/aloha_shape")
-DST_BINARIZE    = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/three_object/three_object_lerobot_binary")
-DST_NO_BINARIZE = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/three_object/three_object_lerobot")
+SRC = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/food/food")
+DST_BINARIZE    = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/food/food_lerobot_binary")
+DST_NO_BINARIZE = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/food/food_lerobot")
 
 LEFT_GRIPPER_JOINT = 6
 RIGHT_GRIPPER_JOINT = 13

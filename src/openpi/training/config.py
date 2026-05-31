@@ -2162,6 +2162,486 @@ _CONFIGS = [
         ),
         policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
     ),
+    # ── Wipe task (wipe_stains_off_plate/cup + put_in_drawer + close_it) ──
+    # Dataset: Datasets/aloha_wipe_plate_cup_gripper_binary
+    #   - 186 episodes, aloha_piper robot, gripper binarized, 3 cameras (cam_high/left_wrist/right_wrist)
+    #   - subtask, cam_high_subgoal, and traj_cot are already present in the dataset
+    # Symlink: ln -sfn <project_root>/Datasets/aloha_wipe_plate_cup_gripper_binary \
+    #   $HF_HOME/lerobot/lixing/aloha_wipe_plate_cup_gripper_binary
+
+    # Baseline — task prompt only, no CoT.
+    TrainConfig(
+        name="pi05_aloha_wipe_baseline",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaDataConfig(
+            repo_id="lixing/aloha_wipe_plate_cup_gripper_binary",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                        }
+                    )
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=2.5e-5,
+            decay_steps=5_000,
+            decay_lr=2.5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
+    # Subtask — per-frame subtask label appended to prompt.
+    TrainConfig(
+        name="pi05_aloha_wipe_subtask",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaDataConfig(
+            repo_id="lixing/aloha_wipe_plate_cup_gripper_binary",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                            "subtask": "subtask",
+                        }
+                    ),
+                    _transforms.AppendSubtaskToPrompt(),
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=2.5e-5,
+            decay_steps=5_000,
+            decay_lr=2.5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
+    # Traj — per-frame trajectory CoT (<loc> tokens, window=60) appended to prompt.
+    TrainConfig(
+        name="pi05_aloha_wipe_traj",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaDataConfig(
+            repo_id="lixing/aloha_wipe_plate_cup_gripper_binary",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                            "traj_cot": "traj_cot",
+                        }
+                    ),
+                    _transforms.AppendTrajCotToPrompt(),
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=2.5e-5,
+            decay_steps=5_000,
+            decay_lr=2.5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
+    # Subgoal — subgoal image (cam_high, window=60) fed as extra visual input.
+    TrainConfig(
+        name="pi05_aloha_wipe_subgoal",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaWithSubgoalDataConfig(
+            repo_id="lixing/aloha_wipe_plate_cup_gripper_binary",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            subgoal_camera_map=(("cam_high", "subgoal_base_0_rgb"),),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "subgoal_images": {
+                                "cam_high": "observation.images.cam_high_subgoal",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                        }
+                    )
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=2.5e-5,
+            decay_steps=5_000,
+            decay_lr=2.5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
+    # All-CoT — subgoal image + subtask label + trajectory CoT.
+    TrainConfig(
+        name="pi05_aloha_wipe_all_cot",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaWithSubgoalDataConfig(
+            repo_id="lixing/aloha_wipe_plate_cup_gripper_binary",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            subgoal_camera_map=(("cam_high", "subgoal_base_0_rgb"),),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "subgoal_images": {
+                                "cam_high": "observation.images.cam_high_subgoal",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                            "subtask": "subtask",
+                            "traj_cot": "traj_cot",
+                        }
+                    ),
+                    _transforms.AppendSubtaskToPrompt(),
+                    _transforms.AppendTrajCotToPrompt(),
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=2.5e-5,
+            decay_steps=5_000,
+            decay_lr=2.5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
+    # ── Food task (place_all_the_food_into_the_plate + place_all_the_non-food_items_into_the_plate) ──
+    # Dataset: Datasets/food/food_lerobot_binary
+    #   - 192 episodes, aloha_piper robot, gripper binarized, 3 cameras (cam_high/left_wrist/right_wrist)
+    #   - subtask: already in parquet
+    #   - cam_high_subgoal: run scripts/step5_preprocess_subgoal.py
+    #   - traj_cot: run scripts/step6_preprocess_traj_cot.py
+    # Symlink: ln -sfn <project_root>/Datasets/food/food_lerobot_binary $HF_HOME/lerobot/lixing/aloha_food
+
+    # Baseline — task prompt only, no CoT signal.
+    TrainConfig(
+        name="pi05_aloha_food_baseline",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaDataConfig(
+            repo_id="lixing/aloha_food",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                        }
+                    )
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=2.5e-5,
+            decay_steps=5_000,
+            decay_lr=2.5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
+    # Subtask — per-frame subtask label appended to prompt.
+    TrainConfig(
+        name="pi05_aloha_food_subtask",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaDataConfig(
+            repo_id="lixing/aloha_food",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                            "subtask": "subtask",
+                        }
+                    ),
+                    _transforms.AppendSubtaskToPrompt(),
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=2.5e-5,
+            decay_steps=5_000,
+            decay_lr=2.5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
+    # Traj — per-frame trajectory CoT (<loc> tokens, window=60) appended to prompt.
+    # Requires: run scripts/step6_food.py first to populate traj_cot column.
+    TrainConfig(
+        name="pi05_aloha_food_traj",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaDataConfig(
+            repo_id="lixing/aloha_food",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                            "traj_cot": "traj_cot",
+                        }
+                    ),
+                    _transforms.AppendTrajCotToPrompt(),
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=2.5e-5,
+            decay_steps=5_000,
+            decay_lr=2.5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
+    # Subgoal — subgoal image (cam_high, window=60) fed as extra visual input.
+    # Requires: run scripts/step5_food.py first to generate cam_high_subgoal videos.
+    TrainConfig(
+        name="pi05_aloha_food_subgoal",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaWithSubgoalDataConfig(
+            repo_id="lixing/aloha_food",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            subgoal_camera_map=(("cam_high", "subgoal_base_0_rgb"),),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "subgoal_images": {
+                                "cam_high": "observation.images.cam_high_subgoal",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                        }
+                    )
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=2.5e-5,
+            decay_steps=5_000,
+            decay_lr=2.5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
+    # All-CoT — subgoal image + subtask label + trajectory CoT.
+    # Requires: run scripts/step5_food.py and scripts/step6_food.py first.
+    TrainConfig(
+        name="pi05_aloha_food_all_cot",
+        model=pi0_config.Pi0Config(pi05=True),
+        data=LeRobotAlohaWithSubgoalDataConfig(
+            repo_id="lixing/aloha_food",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="trossen",
+            ),
+            use_delta_joint_actions=True,
+            adapt_to_pi=True,
+            base_config=DataConfig(prompt_from_task=True),
+            subgoal_camera_map=(("cam_high", "subgoal_base_0_rgb"),),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "subgoal_images": {
+                                "cam_high": "observation.images.cam_high_subgoal",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                            "subtask": "subtask",
+                            "traj_cot": "traj_cot",
+                        }
+                    ),
+                    _transforms.AppendSubtaskToPrompt(),
+                    _transforms.AppendTrajCotToPrompt(),
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        num_train_steps=5_000,
+        batch_size=256,
+        save_interval=500,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=2.5e-5,
+            decay_steps=5_000,
+            decay_lr=2.5e-6,
+        ),
+        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]},
+    ),
     # Joint training on banana + cube datasets (merged LeRobot v2.1 dataset).
     # Dataset preparation:
     #   python scripts/set_action_equal_state.py --dataset_dir aloha_cube

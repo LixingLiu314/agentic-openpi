@@ -26,7 +26,7 @@ import av
 import pandas as pd
 import tqdm
 
-DATASET_DIR = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/three_object/three_object_lerobot_binary")
+DATASET_DIR = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/food/food_lerobot_binary")
 PARQUET_DIR = DATASET_DIR / "data" / "chunk-000"
 VIDEO_DIR   = DATASET_DIR / "videos" / "chunk-000"
 

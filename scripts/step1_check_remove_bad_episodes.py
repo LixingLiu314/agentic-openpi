@@ -82,24 +82,23 @@ def check_episode(parquet_path: pathlib.Path) -> list[str]:
     if len(df) < MIN_FRAMES:
         problems.append(f"too short: {len(df)} frames < {MIN_FRAMES}")
 
-    # 3. Both arms must be active (bimanual task)  +  4. Frozen individual joints per arm
+    # 3. At least one arm must be active (supports both bimanual and single-arm tasks)
+    #    Both arms frozen simultaneously → bad episode.
     state_range  = state.max(axis=0) - state.min(axis=0)
     action_range = action.max(axis=0) - action.min(axis=0)
     left_max  = float(state_range[LEFT_ARM_JOINTS].max())
     right_max = float(state_range[RIGHT_ARM_JOINTS].max())
 
-    if left_max < ACTIVE_ARM_MIN_RANGE:
+    if left_max < ACTIVE_ARM_MIN_RANGE and right_max < ACTIVE_ARM_MIN_RANGE:
         problems.append(
-            f"left arm frozen: max joint range {left_max:.4f} rad "
-            f"< threshold {ACTIVE_ARM_MIN_RANGE}"
-        )
-    if right_max < ACTIVE_ARM_MIN_RANGE:
-        problems.append(
-            f"right arm frozen: max joint range {right_max:.4f} rad "
-            f"< threshold {ACTIVE_ARM_MIN_RANGE}"
+            f"both arms frozen: left max {left_max:.4f} rad, right max {right_max:.4f} rad "
+            f"(threshold {ACTIVE_ARM_MIN_RANGE})"
         )
 
+    arm_active = {"left": left_max >= ACTIVE_ARM_MIN_RANGE, "right": right_max >= ACTIVE_ARM_MIN_RANGE}
     for arm_name, arm_slice in [("left", LEFT_ARM_JOINTS), ("right", RIGHT_ARM_JOINTS)]:
+        if not arm_active[arm_name]:
+            continue  # inactive arm in single-arm task — skip frozen-joint check
         base = arm_slice.start
         frozen_state_joints = [
             base + i for i, r in enumerate(state_range[arm_slice])

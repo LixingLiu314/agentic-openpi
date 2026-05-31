@@ -13,14 +13,15 @@ import pathlib
 import h5py
 import pandas as pd
 
-DATASET_DIR = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/three_object/aloha_shape")
-HDF5_ROOT   = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/three_object/put_the_shapes_into_the_matching_holes")
+DATASET_DIR = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/food/food")
+HDF5_ROOT   = pathlib.Path("/media/raid/workspace/surongpeng/ws_lixing/agentic-openpi/Datasets/food")
 
 
 def hdf5_path(source_path: str) -> pathlib.Path:
-    # source_path: /home/agilex/data/aloha_pipeline/put_the_correct_object_into_the_hole/episode_N.hdf5
-    # HDF5 files are directly in HDF5_ROOT (not in a task subdirectory)
-    return HDF5_ROOT / pathlib.Path(source_path).name
+    # source_path: /home/agilex/data/aloha_pipeline/<task_dir>/episode_N.hdf5
+    # HDF5 files are in HDF5_ROOT/<task_dir>/episode_N.hdf5
+    p = pathlib.Path(source_path)
+    return HDF5_ROOT / p.parent.name / p.name
 
 
 def main() -> None:

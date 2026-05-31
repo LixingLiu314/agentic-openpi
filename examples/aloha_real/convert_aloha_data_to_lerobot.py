@@ -10,9 +10,13 @@ import shutil
 from typing import Literal
 
 import h5py
-from lerobot.common.datasets.lerobot_dataset import LEROBOT_HOME
+from lerobot.common.datasets.lerobot_dataset import HF_LEROBOT_HOME as LEROBOT_HOME
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.common.datasets.push_dataset_to_hub._download_raw import download_raw
+
+try:
+    from lerobot.common.datasets.push_dataset_to_hub._download_raw import download_raw
+except ImportError:
+    download_raw = None
 import numpy as np
 import torch
 import tqdm
@@ -36,6 +40,8 @@ def create_empty_dataset(
     robot_type: str,
     mode: Literal["video", "image"] = "video",
     *,
+    fps: int = 30,
+    cameras: list[str] | None = None,
     has_velocity: bool = False,
     has_effort: bool = False,
     dataset_config: DatasetConfig = DEFAULT_DATASET_CONFIG,
@@ -56,12 +62,13 @@ def create_empty_dataset(
         "left_wrist_rotate",
         "left_gripper",
     ]
-    cameras = [
-        "cam_high",
-        "cam_low",
-        "cam_left_wrist",
-        "cam_right_wrist",
-    ]
+    if cameras is None:
+        cameras = [
+            "cam_high",
+            "cam_low",
+            "cam_left_wrist",
+            "cam_right_wrist",
+        ]
 
     features = {
         "observation.state": {
@@ -114,7 +121,7 @@ def create_empty_dataset(
 
     return LeRobotDataset.create(
         repo_id=repo_id,
-        fps=50,
+        fps=fps,
         robot_type=robot_type,
         features=features,
         use_videos=dataset_config.use_videos,
@@ -164,7 +171,8 @@ def load_raw_images_per_camera(ep: h5py.File, cameras: list[str]) -> dict[str, n
 
 def load_raw_episode_data(
     ep_path: Path,
-) -> tuple[dict[str, np.ndarray], torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    cameras: list[str] | None = None,
+) -> tuple[dict[str, np.ndarray], torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None, list[str] | None]:
     with h5py.File(ep_path, "r") as ep:
         state = torch.from_numpy(ep["/observations/qpos"][:])
         action = torch.from_numpy(ep["/action"][:])
@@ -177,17 +185,17 @@ def load_raw_episode_data(
         if "/observations/effort" in ep:
             effort = torch.from_numpy(ep["/observations/effort"][:])
 
-        imgs_per_cam = load_raw_images_per_camera(
-            ep,
-            [
-                "cam_high",
-                "cam_low",
-                "cam_left_wrist",
-                "cam_right_wrist",
-            ],
-        )
+        subtasks = None
+        if "/observations/subtask" in ep:
+            raw = ep["/observations/subtask"][:]
+            subtasks = [s.decode() if isinstance(s, bytes) else str(s) for s in raw]
 
-    return imgs_per_cam, state, action, velocity, effort
+        if cameras is None:
+            cameras = ["cam_high", "cam_low", "cam_left_wrist", "cam_right_wrist"]
+
+        imgs_per_cam = load_raw_images_per_camera(ep, cameras)
+
+    return imgs_per_cam, state, action, velocity, effort, subtasks
 
 
 def populate_dataset(
@@ -195,6 +203,7 @@ def populate_dataset(
     hdf5_files: list[Path],
     task: str,
     episodes: list[int] | None = None,
+    cameras: list[str] | None = None,
 ) -> LeRobotDataset:
     if episodes is None:
         episodes = range(len(hdf5_files))
@@ -202,13 +211,14 @@ def populate_dataset(
     for ep_idx in tqdm.tqdm(episodes):
         ep_path = hdf5_files[ep_idx]
 
-        imgs_per_cam, state, action, velocity, effort = load_raw_episode_data(ep_path)
+        imgs_per_cam, state, action, velocity, effort, subtasks = load_raw_episode_data(ep_path, cameras=cameras)
         num_frames = state.shape[0]
 
         for i in range(num_frames):
             frame = {
                 "observation.state": state[i],
                 "action": action[i],
+                "task": subtasks[i] if subtasks is not None else task,
             }
 
             for camera, img_array in imgs_per_cam.items():
@@ -221,7 +231,7 @@ def populate_dataset(
 
             dataset.add_frame(frame)
 
-        dataset.save_episode(task=task)
+        dataset.save_episode()
 
     return dataset
 
@@ -232,6 +242,7 @@ def port_aloha(
     raw_repo_id: str | None = None,
     task: str = "DEBUG",
     *,
+    fps: int = 30,
     episodes: list[int] | None = None,
     push_to_hub: bool = True,
     is_mobile: bool = False,
@@ -244,14 +255,19 @@ def port_aloha(
     if not raw_dir.exists():
         if raw_repo_id is None:
             raise ValueError("raw_repo_id must be provided if raw_dir does not exist")
+        if download_raw is None:
+            raise ImportError("download_raw is not available in this version of lerobot")
         download_raw(raw_dir, repo_id=raw_repo_id)
 
     hdf5_files = sorted(raw_dir.glob("episode_*.hdf5"))
+    cameras = get_cameras(hdf5_files)
 
     dataset = create_empty_dataset(
         repo_id,
         robot_type="mobile_aloha" if is_mobile else "aloha",
         mode=mode,
+        fps=fps,
+        cameras=cameras,
         has_effort=has_effort(hdf5_files),
         has_velocity=has_velocity(hdf5_files),
         dataset_config=dataset_config,
@@ -261,9 +277,8 @@ def port_aloha(
         hdf5_files,
         task=task,
         episodes=episodes,
+        cameras=cameras,
     )
-    dataset.consolidate()
-
     if push_to_hub:
         dataset.push_to_hub()
 

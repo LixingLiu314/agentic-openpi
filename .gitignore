@@ -178,3 +178,7 @@ aloha_lerobot_all_cot/
 aloha_cube/
 aloha_merged_banana_cube/
 traj_data/
+aloha_merged_banana_cube_subgoal_base/
+aloha_lerobot_correct_action/
+Datasets/
+test_video/

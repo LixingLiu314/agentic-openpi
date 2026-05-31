@@ -59,16 +59,16 @@ else
 fi
 
 # ── Experiment 1: trajectory COT ────────────────────────────────
-run_exp 1 "three_object_baseline" \
-    pi05_aloha_three_object_baseline \
+run_exp 1 "wipe_baseline" \
+    pi05_aloha_wipe_baseline \
     --debug_steps 5
 
-run_exp 2 "three_object_traj" \
-    pi05_aloha_three_object_traj \
+run_exp 2 "wipe_traj" \
+    pi05_aloha_wipe_traj \
     --debug_steps 5
 
-run_exp 3 "three_object_all_cot" \
-    pi05_aloha_three_object_all_cot \
+run_exp 3 "wipe_all_cot" \
+    pi05_aloha_wipe_all_cot \
     --debug_steps 5
 
 
