@@ -9,18 +9,24 @@ Raw data is expected at:
 ~/data/aloha_pipeline/<task_name>/episode_*.hdf5
 ```
 
-The pipeline writes one dataset to:
+The pipeline writes the converted base dataset to:
 
 ```text
 playground/Datasets/<dataset_name>/
+```
+
+By default it also writes the training-ready gripper-binary dataset to:
+
+```text
+playground/Datasets/<dataset_name>_gripper_binary/
 ```
 
 ## Run
 
 ```bash
 python tools/pipeline/run_aloha_hdf5_pipeline.py \
-  --tasks place_all_the_non-food_items_into_the_plate place_all_the_food_into_the_plate \
-  --dataset-name food \
+  --tasks food_test food_test_2 \
+  --dataset-name food_foreact \
   --overwrite
 ```
 
@@ -36,6 +42,7 @@ python tools/pipeline/run_aloha_hdf5_pipeline.py \
 ## What It Does
 
 1. Screens HDF5 files under the requested task folders.
+   Operator-provided bad episodes can be added on top of automatic screening.
 2. Saves the screen report and bad file list under:
 
    ```text
@@ -43,14 +50,16 @@ python tools/pipeline/run_aloha_hdf5_pipeline.py \
    ```
 
 3. Converts only valid HDF5 episodes into a LeRobot absolute dataset.
-4. Generates calibrated FK trajectory JSON for both arms.
-5. Generates `cot_text_prompts.json` in `Left: ... Right: ...` format.
-6. Renders all annotated front-camera trajectory videos.
+4. Patches per-frame `subtask` labels from each source HDF5 when available.
+5. Generates calibrated FK trajectory JSON for both arms.
+6. Generates `cot_text_prompts.json` in `Left: ... Right: ...` format.
+7. Renders all annotated front-camera trajectory videos.
+8. Creates `<dataset_name>_gripper_binary` with binary gripper actions and fixed parquet video columns.
+9. Re-encodes final dataset videos, generates `cam_high_subgoal`, and writes `traj_cot` into parquets.
 
 Bad HDF5 episodes are not deleted by this pipeline. They are recorded in the
-screen report and skipped during conversion. Once conversion is finished, all
-later stages operate only on valid LeRobot episodes and do not need any manual
-episode exclusion.
+screen report and skipped during conversion. Manual bad episodes are stored in
+the same report with the reason `manual_bad_episode`.
 
 `data_quality/` is persistent screening metadata. When `--overwrite` is used,
 the converter preserves this directory and rebuilds only generated LeRobot
@@ -73,8 +82,18 @@ outputs such as `meta/`, `data/`, and `videos/`.
   - Motion criterion used by HDF5 screening.
 - `--check-images`
   - Include image length/variance checks in screening.
+- `--manual-bad-episodes food_test:3 food_test_2:10:15`
+  - Add operator-specified bad source episodes on top of automatic screening.
+    Accepted forms include absolute paths, root-relative paths, `task:id`,
+    `task:start:stop`, bare `id`, and bare `start:stop`.
+- `--manual-bad-list path/to/bad_episodes.txt`
+  - Read the same manual bad episode tokens from a text file. `#` comments are ignored.
 - `--limit N`
   - Debug conversion on the first N valid episodes after screening.
+- `--skip-gripper-binary`
+  - Keep only the base absolute dataset and skip final gripper-binary creation.
+- `--skip-subgoal`, `--skip-traj-cot-patch`, `--skip-reencode-videos`
+  - Disable individual postprocess stages corresponding to scripts step4/5/6.
 
 ## Output Files
 
@@ -99,6 +118,19 @@ playground/Datasets/<dataset_name>/
     visualizations_all/
       episode_000000_both_trajectory.mp4
       render_report.json
+
+playground/Datasets/<dataset_name>_gripper_binary/
+  meta/
+    info.json
+    modality.json
+  data/
+    chunk-000/episode_000000.parquet   # action binarized; includes subtask/traj_cot
+  videos/
+    chunk-000/observation.images.cam_high/episode_000000.mp4
+    chunk-000/observation.images.cam_high_subgoal/episode_000000.mp4
+  trajectory_data/
+    fk_bimanual.json
+    cot_text_prompts.json
 ```
 
 ## Smoke Test

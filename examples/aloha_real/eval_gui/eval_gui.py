@@ -36,36 +36,36 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _MODE_DESCRIPTIONS = {
     "basic":   "Basic — VLA inference with task prompt only.",
     "traj":    "Add Trajectory — manual L/R waypoint annotation by default.",
-    "subtask": "Add Subtasks — keys 1-8 override the subtask label.",
+    "subtask": "Add Subtasks — number keys override the subtask label.",
     "triple_cot": "Triple-CoT — semi-block task + live subtask + trajectory prompt.",
     "subgoal": "Add Subgoal Images — retrieval, ForeAct, GPT, or video reference generates cam_high subgoal.",
 }
 
 _POLICY_PRESETS = {
     "basic": {
-        "label": "basic - aloha_food baseline",
-        "config": "pi05_aloha_food_baseline",
-        "dir": "/home/agilex/agentic-openpi/food/pi05_aloha_food_baseline/{step}",
+        "label": "basic - aloha_wipe baseline",
+        "config": "pi05_aloha_wipe_baseline",
+        "dir": "/home/agilex/workspace/xiahongyu/agentic-openpi/checkpoints/wipe/pi05_aloha_wipe_baseline/{step}",
     },
     "traj": {
-        "label": "traj - aloha_food trajectory cot",
-        "config": "pi05_aloha_food_traj",
-        "dir": "/home/agilex/agentic-openpi/food/pi05_aloha_food_traj/{step}",
+        "label": "traj - aloha_wipe trajectory cot",
+        "config": "pi05_aloha_wipe_traj",
+        "dir": "/home/agilex/workspace/xiahongyu/agentic-openpi/checkpoints/wipe/pi05_aloha_wipe_traj/{step}",
     },
     "subtask": {
-        "label": "subtask - aloha_food labels",
-        "config": "pi05_aloha_food_subtask",
-        "dir": "/home/agilex/agentic-openpi/food/pi05_aloha_food_subtask/{step}",
+        "label": "subtask - aloha_wipe labels",
+        "config": "pi05_aloha_wipe_subtask",
+        "dir": "/home/agilex/workspace/xiahongyu/agentic-openpi/checkpoints/wipe/pi05_aloha_wipe_subtask/{step}",
     },
     "triple_cot": {
-        "label": "triple-cot - aloha_food all cot",
-        "config": "pi05_aloha_food_all_cot",
-        "dir": "/home/agilex/agentic-openpi/food/pi05_aloha_food_all_cot/{step}",
+        "label": "triple-cot - aloha_wipe all cot",
+        "config": "pi05_aloha_wipe_all_cot",
+        "dir": "/home/agilex/workspace/xiahongyu/agentic-openpi/checkpoints/wipe/pi05_aloha_wipe_all_cot/{step}",
     },
     "subgoal": {
-        "label": "subgoal - aloha_food base camera",
-        "config": "pi05_aloha_food_subgoal",
-        "dir": "/home/agilex/agentic-openpi/food/pi05_aloha_food_subgoal/{step}",
+        "label": "subgoal - aloha_wipe base camera",
+        "config": "pi05_aloha_wipe_subgoal",
+        "dir": "/home/agilex/workspace/xiahongyu/agentic-openpi/checkpoints/wipe/pi05_aloha_wipe_subgoal/{step}",
     },
 }
 
@@ -80,7 +80,7 @@ _CHECKPOINT_HISTORY_LIMIT = 30
 _CHECKPOINT_HISTORY_ENV = "AGENTIC_OPENPI_EVAL_GUI_HISTORY"
 _TRAJ_RETRIEVAL_CACHE_ENV = "AGENTIC_OPENPI_TRAJ_RETRIEVAL_CACHE"
 _TRAJ_RETRIEVAL_DATASET_ENV = "AGENTIC_OPENPI_TRAJ_RETRIEVAL_DATASET"
-_DEFAULT_TRAJ_RETRIEVAL_DATASET = _REPO_ROOT / "playground" / "Datasets" / "food"
+_DEFAULT_TRAJ_RETRIEVAL_DATASET = _REPO_ROOT / "playground" / "Datasets" / "wipe"
 
 
 def _np_to_qpixmap(img_hwc_rgb: Optional[np.ndarray], target_w: int, target_h: int) -> QtGui.QPixmap:
@@ -781,7 +781,7 @@ class EvalGUI(QtWidgets.QMainWindow):
         # ForeAct + chunk + max_steps
         cfg_row = QtWidgets.QHBoxLayout()
         cfg_row.addWidget(QtWidgets.QLabel("ForeAct:"))
-        self.le_fhost = QtWidgets.QLineEdit("10.1.119.68")
+        self.le_fhost = QtWidgets.QLineEdit("127.0.0.1")
         self.le_fhost.setFixedWidth(120)
         cfg_row.addWidget(self.le_fhost)
         self.le_fport = QtWidgets.QLineEdit("5100")
@@ -1053,6 +1053,15 @@ class EvalGUI(QtWidgets.QMainWindow):
         sub_layout = QtWidgets.QVBoxLayout(self.gb_subtask)
         self.subtask_inputs: dict[int, QtWidgets.QLineEdit] = {}
 
+        preset_row = QtWidgets.QHBoxLayout()
+        preset_row.addWidget(QtWidgets.QLabel("Preset:"))
+        self.cb_subtask_preset = QtWidgets.QComboBox()
+        for preset_name in _modes.DEFAULT_SUBTASK_PRESETS:
+            self.cb_subtask_preset.addItem(preset_name)
+        self.cb_subtask_preset.currentTextChanged.connect(self._on_subtask_preset_changed)
+        preset_row.addWidget(self.cb_subtask_preset, 1)
+        sub_layout.addLayout(preset_row)
+
         self.subtask_scroll = QtWidgets.QScrollArea()
         self.subtask_scroll.setWidgetResizable(True)
         self.subtask_scroll.setMinimumHeight(112)
@@ -1319,6 +1328,8 @@ class EvalGUI(QtWidgets.QMainWindow):
                 "obstacle",
                 "aloha_food",
                 "food",
+                "wipe",
+                "aloha_wipe",
                 "non-food",
                 "non_food",
                 "plate",
@@ -1337,13 +1348,17 @@ class EvalGUI(QtWidgets.QMainWindow):
         if markers & {
             "aloha_food",
             "food",
+            "wipe",
+            "aloha_wipe",
             "non-food",
             "non_food",
             "plate",
             "place_all_the_food_into_the_plate",
             "place_all_the_non-food_items_into_the_plate",
         }:
-            markers.update({"aloha_food", "food", "non-food", "non_food", "plate"})
+            markers.update(
+                {"aloha_food", "food", "wipe", "aloha_wipe", "non-food", "non_food", "plate"}
+            )
         return markers
 
     @staticmethod
@@ -1356,6 +1371,10 @@ class EvalGUI(QtWidgets.QMainWindow):
 
     def _checkpoint_matches_mode(self, mode: str, path: str) -> bool:
         preset = _POLICY_PRESETS.get(mode, _POLICY_PRESETS["basic"])
+        preset_dir_lower = preset["dir"].lower()
+        if "aloha_wipe" in preset_dir_lower or "/wipe/" in preset_dir_lower:
+            path_markers = self._checkpoint_task_markers(path)
+            return bool(path_markers & {"wipe", "aloha_wipe"})
         preset_markers = self._checkpoint_task_markers(
             f"{preset['config']} {preset['dir']}"
         )
@@ -1747,6 +1766,18 @@ class EvalGUI(QtWidgets.QMainWindow):
         new_label = self.subtask_inputs[key].text().strip()
         self._runtime.set_subtask_label(key, new_label)
         self._log_info(f"subtask[{key}] -> {new_label!r}")
+
+    def _on_subtask_preset_changed(self, preset_name: str) -> None:
+        subtasks = _modes.DEFAULT_SUBTASK_PRESETS.get(preset_name)
+        if subtasks is None:
+            return
+        try:
+            self._runtime.set_subtasks(subtasks)
+        except Exception as e:                       # noqa: BLE001
+            self._log_error(f"Load preset failed: {e}")
+            return
+        self._refresh_subtask_inputs()
+        self._log_info(f"Loaded subtask preset: {preset_name}")
 
     def _on_add_subtask(self) -> None:
         key = self._runtime.add_subtask_label()

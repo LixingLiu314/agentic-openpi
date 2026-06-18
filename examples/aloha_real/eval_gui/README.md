@@ -233,7 +233,7 @@ only for hardware calibration/debugging.
 ## Prerequisites
 
 1. **Robot stack** (Piper ROS) up and homed.
-2. **ForeAct server** (only for `subgoal` mode), on `10.1.119.68`:
+2. **ForeAct server** (only for `subgoal` mode), on `127.0.0.1`:
    ```bash
    python server_foreact.py
    ```
@@ -323,7 +323,7 @@ The handlers reproduce — at inference time — the *post-repack* shape of
 * **回零 button does nothing** — click *Connect* first; the env has to exist.
 * **Cameras black** — robot stack not running (no images on ROS topics).
 * **Doubao timeout** — set `VOLCENKEY`; the prompt falls back to `task` only.
-* **ForeAct unreachable** — check `10.1.119.68:5100`; the run continues without
+* **ForeAct unreachable** — check `127.0.0.1:5100`; the run continues without
   a fresh subgoal image until ForeAct becomes reachable again.
 * **Train/eval mismatch** — check the GUI Mode and checkpoint selector first,
   then open the latest `debug_inputs/step_*/` folder and inspect

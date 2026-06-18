@@ -34,6 +34,7 @@ import threading
 import time
 import uuid
 from typing import Optional
+from urllib.parse import urlsplit
 
 import numpy as np
 import websockets.sync.client
@@ -48,13 +49,16 @@ class ForeactClient:
 
     def __init__(
         self,
-        host: str = "10.1.119.68",
+        host: str = "127.0.0.1",
         port: int = 5100,
         connect_timeout: float = 30.0,
         request_timeout: float = 60.0,
     ) -> None:
+        host = host.strip()
         if host.startswith("ws"):
             self._uri = host
+        elif self._host_includes_port(host):
+            self._uri = f"ws://{host}"
         else:
             self._uri = f"ws://{host}:{port}"
         self._packer = msgpack_numpy.Packer()
@@ -63,6 +67,13 @@ class ForeactClient:
         self._lock = threading.Lock()
         self._ws = None
         self._metadata: Optional[dict] = None
+
+    @staticmethod
+    def _host_includes_port(host: str) -> bool:
+        try:
+            return urlsplit(f"//{host}").port is not None
+        except ValueError:
+            return False
 
     def connect(self) -> dict:
         deadline = time.time() + self._connect_timeout

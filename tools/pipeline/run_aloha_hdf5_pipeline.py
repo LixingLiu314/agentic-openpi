@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import aloha_postprocess as post
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCREEN_SCRIPT = REPO_ROOT / "tools" / "data_quality" / "screen_hdf5_episodes.py"
@@ -92,6 +94,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-trajectory", action="store_true")
     parser.add_argument("--skip-cot", action="store_true")
     parser.add_argument("--skip-videos", action="store_true")
+    parser.add_argument("--skip-subtask-patch", action="store_true", help="Do not patch HDF5 subtask labels into parquets.")
+    parser.add_argument("--skip-gripper-binary", action="store_true", help="Do not create the *_gripper_binary dataset.")
+    parser.add_argument("--skip-reencode-videos", action="store_true", help="Do not re-encode videos in the final dataset.")
+    parser.add_argument("--skip-subgoal", action="store_true", help="Do not generate cam_high_subgoal videos.")
+    parser.add_argument("--skip-traj-cot-patch", action="store_true", help="Do not write traj_cot back into final parquets.")
     parser.add_argument("--num-workers", type=int, default=8, help="Workers for HDF5 screening.")
     parser.add_argument("--cot-workers", type=int, default=8)
     parser.add_argument("--video-workers", type=int, default=4)
@@ -100,6 +107,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-joint-range", type=float, default=0.03)
     parser.add_argument("--min-cumulative-joint-movement", type=float, default=0.15)
     parser.add_argument("--check-images", action="store_true")
+    parser.add_argument(
+        "--manual-bad-episodes",
+        nargs="*",
+        default=None,
+        help=(
+            "Operator-specified bad HDF5 episodes added to automatic screening. "
+            "Accepts paths, task:episode_id, task:start:stop, episode_id, or start:stop."
+        ),
+    )
+    parser.add_argument("--manual-bad-list", type=Path, default=None, help="Text file of manual bad episode tokens.")
     parser.add_argument("--episode-index-mode", choices=["auto", "preserve", "sequential"], default="sequential")
     parser.add_argument("--limit", type=int, default=None, help="Debug option passed to conversion after screening.")
     parser.add_argument("--ffmpeg-bin", default="ffmpeg")
@@ -108,6 +125,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-size", type=int, default=256)
     parser.add_argument("--left-gripper-dim", type=int, default=6)
     parser.add_argument("--right-gripper-dim", type=int, default=13)
+    parser.add_argument("--gripper-binary-suffix", default="_gripper_binary")
+    parser.add_argument("--gripper-close-threshold", type=float, default=0.05)
+    parser.add_argument("--gripper-open-value", type=float, default=0.09)
+    parser.add_argument("--gripper-close-value", type=float, default=0.0)
+    parser.add_argument("--subgoal-window", type=int, default=60)
+    parser.add_argument("--subgoal-camera", default="cam_high")
+    parser.add_argument("--traj-cot-window", type=int, default=60)
+    parser.add_argument("--traj-cot-column", default="traj_cot")
+    parser.add_argument("--postprocess-video-codec", default="libsvtav1")
+    parser.add_argument("--postprocess-video-crf", type=int, default=30)
     return parser
 
 
@@ -160,6 +187,10 @@ def main() -> None:
         ]
         if args.check_images:
             screen_command.append("--check-images")
+        if args.manual_bad_episodes:
+            screen_command.extend(["--manual-bad-episodes", *args.manual_bad_episodes])
+        if args.manual_bad_list is not None:
+            screen_command.extend(["--manual-bad-list", str(args.manual_bad_list.expanduser())])
         run_command(screen_command, REPO_ROOT)
 
     screen_data = read_json(report_path)
@@ -208,6 +239,11 @@ def main() -> None:
         if args.limit is not None:
             convert_command.extend(["--limit", str(args.limit)])
         run_command(convert_command, REPO_ROOT)
+
+    postprocess_report: dict[str, Any] = {}
+    if not args.skip_subtask_patch:
+        print("\n[POST] Patching subtask labels from HDF5 source files", flush=True)
+        postprocess_report["subtask_patch"] = post.patch_subtasks_from_hdf5(dataset_path)
 
     traj_json = dataset_path / "trajectory_data" / args.traj_json_name
     cot_json = dataset_path / "trajectory_data" / args.cot_json_name
@@ -267,9 +303,56 @@ def main() -> None:
             REPO_ROOT,
         )
 
+    final_dataset_path = dataset_path
+    if not args.skip_gripper_binary:
+        final_dataset_path = dataset_root / f"{args.dataset_name}{args.gripper_binary_suffix}"
+        print(f"\n[POST] Creating gripper-binary dataset: {final_dataset_path}", flush=True)
+        postprocess_report["gripper_binary"] = post.create_gripper_binary_dataset(
+            dataset_path,
+            final_dataset_path,
+            repo_id=f"{repo_id}{args.gripper_binary_suffix}",
+            overwrite=args.overwrite,
+            left_gripper_joint=args.left_gripper_dim,
+            right_gripper_joint=args.right_gripper_dim,
+            close_threshold=args.gripper_close_threshold,
+            open_value=args.gripper_open_value,
+            close_value=args.gripper_close_value,
+        )
+
+    final_cot_json = final_dataset_path / "trajectory_data" / args.cot_json_name
+
+    if not args.skip_reencode_videos:
+        print(f"\n[POST] Re-encoding final dataset videos: {final_dataset_path}", flush=True)
+        postprocess_report["reencode_videos"] = post.reencode_videos(
+            final_dataset_path,
+            codec=args.postprocess_video_codec,
+            crf=args.postprocess_video_crf,
+        )
+
+    if not args.skip_subgoal:
+        print(f"\n[POST] Generating subgoal videos: {final_dataset_path}", flush=True)
+        postprocess_report["subgoal"] = post.add_subgoal_videos(
+            final_dataset_path,
+            camera=args.subgoal_camera,
+            window=args.subgoal_window,
+            codec=args.postprocess_video_codec,
+            crf=args.postprocess_video_crf,
+            overwrite=args.overwrite,
+        )
+
+    if not args.skip_traj_cot_patch:
+        print(f"\n[POST] Writing {args.traj_cot_column} column: {final_dataset_path}", flush=True)
+        postprocess_report["traj_cot_patch"] = post.patch_traj_cot_column(
+            final_dataset_path,
+            cot_json=final_cot_json,
+            window=args.traj_cot_window,
+            column=args.traj_cot_column,
+        )
+
     summary = {
         "raw_root": str(raw_root),
         "dataset_path": str(dataset_path),
+        "final_dataset_path": str(final_dataset_path),
         "dataset_name": args.dataset_name,
         "repo_id": repo_id,
         "robot_type": args.robot_type,
@@ -282,9 +365,16 @@ def main() -> None:
         "skipped_trajectory": bool(args.skip_trajectory),
         "skipped_cot": bool(args.skip_cot),
         "skipped_videos": bool(args.skip_videos),
+        "skipped_subtask_patch": bool(args.skip_subtask_patch),
+        "skipped_gripper_binary": bool(args.skip_gripper_binary),
+        "skipped_reencode_videos": bool(args.skip_reencode_videos),
+        "skipped_subgoal": bool(args.skip_subgoal),
+        "skipped_traj_cot_patch": bool(args.skip_traj_cot_patch),
         "trajectory_json": str(traj_json),
         "cot_json": str(cot_json),
+        "final_cot_json": str(final_cot_json),
         "visualization_dir": str(dataset_path / "trajectory_data" / "visualizations_all"),
+        "postprocess": postprocess_report,
     }
     write_json(data_quality_dir / "pipeline_summary.json", summary)
     print(f"[DONE] Dataset pipeline complete: {dataset_path}")

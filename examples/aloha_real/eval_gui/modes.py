@@ -13,7 +13,7 @@ That means the handler must do the work of those repack transforms itself:
                ..."``.
   * subtask -- prompt = ``"<task>, subtask: <label>"`` (mirrors
                ``_transforms.AppendSubtaskToPrompt`` exactly). Labels are
-               user-editable and the keys 1..4 select among them.
+               user-editable and number keys select among them.
   * triple_cot -- prompt = ``"Task: <task>, subtask: <label>, traj: <text>"``.
                   This mode uses the semi-block trajectory pipeline while the
                   subtask key remains a live runtime value.
@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Default subtask label mapping.
-# These keys (1-8) match the operator controls in subtask mode.
+# These keys match the operator controls in subtask mode.
 # At runtime the user can edit them in the GUI or load a JSON override.
 # ---------------------------------------------------------------------------
 # DEFAULT_SUBTASK_LABELS: Dict[int, str] = {
@@ -68,14 +68,71 @@ logger = logging.getLogger(__name__)
 #     3: "Move the cuboid on the hole",
 #     4: "Put the cuboid in the hole"
 # }
-DEFAULT_TASK_PROMPT = "place_all_the_food_into_the_plate"
+DEFAULT_TASK_PROMPT = (
+    "Wipe stains off plate/cup with towel/sponge, put plate/cup in drawer, and close it."
+)
 
-DEFAULT_SUBTASK_LABELS: Dict[int, str] = {
-    1: "reach for food on the table",
-    2: "grasp the food",
-    3: "move food to the plate",
-    4: "release the food",
+SUBTASKS_1: List[str] = [
+    "Reach towel on table",
+    "Grasp towel",
+    "Wipe plate",
+    "Release towel on table",
+    "Reach plate",
+    "Hold plate",
+    "Move plate into open drawer",
+    "Release plate",
+    "Close drawer",
+]
+
+SUBTASKS_2: List[str] = [
+    "Reach sponge on table",
+    "Grasp sponge",
+    "Wipe plate",
+    "Release sponge on table",
+    "Reach plate",
+    "Hold plate",
+    "Move plate into open drawer",
+    "Release plate",
+    "Close drawer",
+]
+
+SUBTASKS_3: List[str] = [
+    "Reach cup",
+    "Hold cup",
+    "Reach towel on table",
+    "Grasp towel",
+    "Wipe cup",
+    "Release towel on table",
+    "Move cup into open drawer",
+    "Release cup",
+    "Close drawer",
+]
+
+SUBTASKS_4: List[str] = [
+    "Reach cup",
+    "Hold cup",
+    "Reach sponge on table",
+    "Grasp sponge",
+    "Wipe cup",
+    "Release sponge on table",
+    "Move cup into open drawer",
+    "Release cup",
+    "Close drawer",
+]
+
+DEFAULT_SUBTASK_PRESETS: Dict[str, List[str]] = {
+    "1 plate + towel": SUBTASKS_1,
+    "2 plate + sponge": SUBTASKS_2,
+    "3 cup + towel": SUBTASKS_3,
+    "4 cup + sponge": SUBTASKS_4,
 }
+
+
+def subtask_list_to_labels(subtasks: List[str]) -> Dict[int, str]:
+    return {i + 1: str(label) for i, label in enumerate(subtasks)}
+
+
+DEFAULT_SUBTASK_LABELS: Dict[int, str] = subtask_list_to_labels(SUBTASKS_1)
 
 def to_chw_uint8(img_hwc_rgb: np.ndarray, h: int = 224, w: int = 224) -> np.ndarray:
     """HxWx3 uint8 RGB -> (3, h, w) uint8 with the same resize/pad as training."""
@@ -123,6 +180,15 @@ class RuntimeState:
         new = {int(k): str(v) for k, v in data.items() if str(k).isdigit()}
         if not new:
             raise ValueError(f"No usable {{int_key: str_label}} entries in {path}")
+        self.set_subtask_labels(new)
+
+    def set_subtasks(self, subtasks: List[str]) -> None:
+        self.set_subtask_labels(subtask_list_to_labels(subtasks))
+
+    def set_subtask_labels(self, labels: Dict[int, str]) -> None:
+        new = {int(k): str(v) for k, v in labels.items()}
+        if not new:
+            raise ValueError("At least one subtask label is required")
         with self._subtask_cond:
             self.subtask_labels = new
             if self.subtask_key not in new:
@@ -294,7 +360,7 @@ class BasicMode(ModeHandler):
 class SubtaskMode(ModeHandler):
     """Mode 3: prompt = f"{task}, subtask: {label}".
 
-    Label is selected by ``runtime.subtask_key``; the GUI's 1/2/3/4 keys
+    Label is selected by ``runtime.subtask_key``; the GUI's number keys
     update that field. An optional ``subtask_predictor`` hook can
     auto-suggest the next key every ``step_interval`` steps; if it
     returns ``None`` we keep the human override.
@@ -913,11 +979,7 @@ class TripleCotMode(TrajectoryMode):
         if callable(should_generate):
             return bool(should_generate(loop_step))
         update_every = self._predictor.update_every
-        if loop_step == 0:
-            return True
-        if loop_step == update_every:
-            return False
-        return loop_step > update_every and loop_step % update_every == 0
+        return loop_step == 0 or loop_step % update_every == 0
 
     def _has_subgoal_cache(self) -> bool:
         if self._subgoal_handler is None:
@@ -1232,11 +1294,7 @@ class SubgoalMode(ModeHandler):
         self._update_every = max(1, int(n))
 
     def _should_generate_subgoal(self, loop_step: int) -> bool:
-        if loop_step == 0:
-            return True
-        if loop_step == self._update_every:
-            return False
-        return loop_step > self._update_every and loop_step % self._update_every == 0
+        return loop_step == 0 or loop_step % self._update_every == 0
 
     def before_control_step(
         self,
@@ -1516,7 +1574,7 @@ class _ManualOnlyTrajectoryPredictor:
 def make_handler(
     mode: str,
     *,
-    foreact_host: str = "10.1.119.68",
+    foreact_host: str = "127.0.0.1",
     foreact_port: int = 5100,
     traj_step_interval: int = 6,
     subgoal_step_interval: int = 30,

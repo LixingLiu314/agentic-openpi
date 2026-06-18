@@ -7,6 +7,7 @@ from concurrent.futures import as_completed
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 import shutil
 import time
 from typing import Any
@@ -355,6 +356,135 @@ def parse_tasks(values: list[str] | None) -> set[str] | None:
     return tasks or None
 
 
+def source_episode_index(path: Path) -> int | None:
+    match = None
+    for pattern in (r"episode[_-](\d+)\.hdf5$", r"(\d+)\.hdf5$"):
+        match = re.search(pattern, path.name)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def load_manual_bad_tokens(values: list[str] | None, list_path: Path | None) -> list[str]:
+    tokens: list[str] = []
+    for value in values or []:
+        for part in value.replace(",", " ").split():
+            part = part.strip()
+            if part:
+                tokens.append(part)
+    if list_path is not None:
+        for line in list_path.expanduser().read_text(encoding="utf-8").splitlines():
+            text = line.split("#", 1)[0].strip()
+            if text:
+                tokens.extend(text.replace(",", " ").split())
+    return tokens
+
+
+def _parse_episode_range(text: str) -> set[int]:
+    if ":" not in text:
+        return {int(text)}
+    start_text, stop_text = text.split(":", 1)
+    if not start_text or not stop_text:
+        raise ValueError(f"Invalid episode range {text!r}; expected start:stop")
+    start = int(start_text)
+    stop = int(stop_text)
+    if stop < start:
+        raise ValueError(f"Invalid episode range {text!r}; stop must be >= start")
+    return set(range(start, stop))
+
+
+def resolve_manual_bad_paths(root: Path, paths: list[Path], tokens: list[str]) -> tuple[set[str], list[dict[str, Any]]]:
+    """Resolve operator-provided bad episode tokens to absolute HDF5 paths.
+
+    Supported token forms:
+      - absolute or root-relative path: /data/task/episode_000001.hdf5, task/episode_000001.hdf5
+      - task-specific source ids: task_name:1, task_name:1:5
+      - bare source ids: 1, 1:5 (matches all selected tasks with those source ids)
+    """
+    if not tokens:
+        return set(), []
+
+    path_by_abs = {str(path.expanduser().resolve()): path for path in paths}
+    path_by_rel = {path.relative_to(root).as_posix(): path for path in paths}
+    task_index: dict[tuple[str, int], list[Path]] = {}
+    id_index: dict[int, list[Path]] = {}
+    for path in paths:
+        rel_parts = path.relative_to(root).parts
+        task = rel_parts[0] if rel_parts else ""
+        ep_idx = source_episode_index(path)
+        if ep_idx is None:
+            continue
+        task_index.setdefault((task, ep_idx), []).append(path)
+        id_index.setdefault(ep_idx, []).append(path)
+
+    resolved: set[str] = set()
+    unmatched: list[dict[str, Any]] = []
+
+    def add_path(path: Path, token: str) -> None:
+        del token
+        resolved.add(str(path.expanduser().resolve()))
+
+    for token in tokens:
+        token = token.strip()
+        if not token:
+            continue
+
+        candidate = Path(token).expanduser()
+        if candidate.is_absolute():
+            abs_key = str(candidate.resolve())
+            if abs_key in path_by_abs:
+                add_path(path_by_abs[abs_key], token)
+            elif candidate.exists():
+                resolved.add(abs_key)
+            else:
+                unmatched.append({"token": token, "reason": "absolute_path_not_found"})
+            continue
+
+        if token.endswith(".hdf5") or "/" in token:
+            rel_key = candidate.as_posix()
+            if rel_key in path_by_rel:
+                add_path(path_by_rel[rel_key], token)
+                continue
+            abs_candidate = (root / candidate).resolve()
+            abs_key = str(abs_candidate)
+            if abs_key in path_by_abs:
+                add_path(path_by_abs[abs_key], token)
+            elif abs_candidate.exists():
+                resolved.add(abs_key)
+            else:
+                unmatched.append({"token": token, "reason": "relative_path_not_found"})
+            continue
+
+        if ":" in token and not token.replace(":", "").isdigit():
+            task, episode_text = token.split(":", 1)
+            matches: list[Path] = []
+            for ep_idx in _parse_episode_range(episode_text):
+                matches.extend(task_index.get((task, ep_idx), []))
+            if matches:
+                for path in matches:
+                    add_path(path, token)
+            else:
+                unmatched.append({"token": token, "reason": "task_episode_not_found"})
+            continue
+
+        try:
+            episode_ids = _parse_episode_range(token)
+        except ValueError as exc:
+            unmatched.append({"token": token, "reason": str(exc)})
+            continue
+
+        matches = []
+        for ep_idx in episode_ids:
+            matches.extend(id_index.get(ep_idx, []))
+        if matches:
+            for path in matches:
+                add_path(path, token)
+        else:
+            unmatched.append({"token": token, "reason": "episode_id_not_found"})
+
+    return resolved, unmatched
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Screen raw Aloha HDF5 episodes and optionally remove bad ones.")
     parser.add_argument(
@@ -393,6 +523,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-image-std", type=float, default=1.0)
     parser.add_argument("--num-workers", type=int, default=1)
     parser.add_argument(
+        "--manual-bad-episodes",
+        nargs="*",
+        default=None,
+        help=(
+            "Operator-provided bad episodes to add on top of automatic screening. "
+            "Accepts paths, task:episode_id, task:start:stop, episode_id, or start:stop."
+        ),
+    )
+    parser.add_argument(
+        "--manual-bad-list",
+        type=Path,
+        default=None,
+        help="Text file with one manual bad episode token per line; # comments are ignored.",
+    )
+    parser.add_argument(
         "--apply", action="store_true", help="Actually remove bad episodes. Without this, only writes a report."
     )
     parser.add_argument(
@@ -417,6 +562,8 @@ def main() -> None:
     paths = hdf5_paths(root, tasks)
     if not paths:
         raise SystemExit(f"No HDF5 files found under {root}")
+    manual_tokens = load_manual_bad_tokens(args.manual_bad_episodes, args.manual_bad_list)
+    manual_bad_paths, manual_unmatched = resolve_manual_bad_paths(root, paths, manual_tokens)
 
     thresholds = Thresholds(
         min_frames=args.min_frames,
@@ -441,6 +588,12 @@ def main() -> None:
                 results.append(future.result())
         results.sort(key=lambda item: item["relative_path"])
 
+    for item in results:
+        if str(Path(item["path"]).expanduser().resolve()) in manual_bad_paths:
+            item["bad"] = True
+            if "manual_bad_episode" not in item["reasons"]:
+                item["reasons"].append("manual_bad_episode")
+
     bad = [item for item in results if item["bad"]]
     warning_episodes = [item for item in results if item.get("warnings")]
     num_warnings = sum(len(item.get("warnings", [])) for item in warning_episodes)
@@ -452,6 +605,9 @@ def main() -> None:
         "num_warning_episodes": len(warning_episodes),
         "num_warnings": num_warnings,
         "thresholds": threshold_dict,
+        "manual_bad_episode_tokens": manual_tokens,
+        "manual_bad_episode_paths": sorted(manual_bad_paths),
+        "manual_bad_unmatched": manual_unmatched,
         "bad_episodes": bad,
         "warning_episodes": [
             {
