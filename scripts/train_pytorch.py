@@ -171,10 +171,9 @@ def save_checkpoint(model, optimizer, global_step, config, is_main, data_config)
         # Save optimizer state using PyTorch format
         torch.save(optimizer.state_dict(), tmp_ckpt_dir / "optimizer.pt")
 
-        # Save training metadata (avoid saving full config to prevent JAX/Flax compatibility issues)
+        # Save training metadata (config excluded — contains unpicklable lambdas)
         metadata = {
             "global_step": global_step,
-            "config": dataclasses.asdict(config),
             "timestamp": time.time(),
         }
         torch.save(metadata, tmp_ckpt_dir / "metadata.pt")
