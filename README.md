@@ -1,4 +1,6 @@
-# openpi
+# agentic-openpi
+
+This repository is a fork of Physical Intelligence's [openpi](https://github.com/Physical-Intelligence/openpi), extended with a full pipeline for fine-tuning and evaluating $\pi_0$/$\pi_{0.5}$ policies on real AgileX ALOHA hardware, including data processing, trajectory/subgoal-conditioned prompting, and a PyQt5 evaluation GUI. See [Fork-Specific Additions](#fork-specific-additions) below for what's new on top of upstream openpi. The original project description follows.
 
 openpi holds open-source models and packages for robotics, published by the [Physical Intelligence team](https://www.physicalintelligence.company/).
 
@@ -10,6 +12,44 @@ Currently, this repo contains three types of models:
 For all models, we provide _base model_ checkpoints, pre-trained on 10k+ hours of robot data, and examples for using them out of the box or fine-tuning them to your own datasets.
 
 This is an experiment: $\pi_0$ was developed for our own robots, which differ from the widely used platforms such as [ALOHA](https://tonyzhaozh.github.io/aloha/) and [DROID](https://droid-dataset.github.io/), and though we are optimistic that researchers and practitioners will be able to run creative new experiments adapting $\pi_0$ to their own platforms, we do not expect every such attempt to be successful. All this is to say: $\pi_0$ may or may not work for you, but you are welcome to try it and see!
+
+## Fork-Specific Additions
+
+On top of upstream openpi, this repo adds three main pieces for working with real AgileX ALOHA robots:
+
+### 1. ALOHA data pipeline (`tools/`, `scripts/`)
+
+End-to-end processing from raw HDF5 episode recordings to a training-ready LeRobot dataset with trajectory and chain-of-thought (CoT) annotations:
+
+- `tools/calibration/` — camera intrinsic/extrinsic (hand-eye) calibration for the front and wrist cameras.
+- `tools/data_quality/` — screens raw HDF5 episodes for corrupt files, missing data, NaN/Inf, frozen joints, and insufficient motion before conversion.
+- `tools/conversion/` — converts screened HDF5 episodes into an absolute-action LeRobot v2.1 dataset.
+- `tools/trajectory/` — projects forward-kinematics waypoints into camera pixel space and generates bimanual trajectory/CoT text prompts (`<locXXXX><locYYYY>` tokens), plus visualization tools.
+- `tools/pipeline/run_aloha_hdf5_pipeline.py` — single entry point that runs the full chain above (screen → convert → FK trajectory → CoT prompts → gripper binarization → video re-encoding) and writes results to `playground/Datasets/<dataset_name>/`. See `tools/README.md` for the full workflow and manual per-stage commands.
+- `scripts/step1_check_remove_bad_episodes.py` … `step6_preprocess_traj_cot.py` — the individual pipeline stages, runnable standalone for debugging a single step.
+- `scripts/merge_datasets.py`, `scripts/compute_norm_stats.py` — dataset merging and normalization-statistics utilities.
+
+### 2. PyTorch training/serving path
+
+- `scripts/train_pytorch.py` — PyTorch training entry point with multi-GPU/multi-node DDP support, alongside the original JAX `scripts/train.py`.
+- `scripts/serve_policy_pytorch.py` — PyTorch-only policy server.
+- Hyperparameter sweep scripts for specific ALOHA task experiments (`scripts/run_banana_sweep.sh`, `scripts/run_subgoal_sweep_1.sh`, `scripts/run_subgoal_sweep_2.sh`).
+
+### 3. ALOHA real-robot evaluation GUI (`examples/aloha_real/eval_gui/`)
+
+A PyQt5 application for running and recording policy evaluations on real ALOHA hardware, with five operating modes that match the conditioning used during training:
+
+| Mode | What it sends to the policy |
+| --- | --- |
+| `basic` | task prompt only |
+| `traj` | task + bimanual FK trajectory described in text |
+| `subtask` | task + operator-selected subtask label |
+| `subgoal` | task + a generated subgoal image (via ForeAct, Doubao, or GPT image APIs) |
+| Triple-CoT | task + subtask + trajectory + subgoal image combined |
+
+Supporting components include trajectory retrieval from prior datasets (`trajectory_retrieval.py`), reference-video lookahead (`reference_video_provider.py`), a Doubao/Volcengine Ark trajectory predictor (`doubao_traj_predictor.py.py`, `eval_gui/doubao_predictor.py`), a GPT-based subgoal image client (`gpt_subgoal_client.py`, `generate_cached_subgoals.py`), and a standalone subgoal server (`server_foreact.py`). Each evaluation run is recorded to `test_video/` with a per-run JSONL log of model inputs/outputs. See `examples/aloha_real/eval_gui/README.md` and `scripts/start_aloha_eval_gui.sh` / `scripts/eval_aloha_modes.sh` for usage.
+
+---
 
 ## Updates
 
