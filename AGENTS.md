@@ -1,5 +1,11 @@
 # agentic-openpi server development
 
+## N1排队恢复说明（2026-09-11，优先于下方attempt_01）
+
+- 首次N1等待进程attempt_01/PID1240872确已派发，但最后环境核验发现从CPU-only派发命令继承了空CUDA_VISIBLE_DEVICES；尚无GPU工作/训练。仅该无子进程的N1 waiter在核验PID、创建时间、argv和waiting_predecessor阶段后被SIGTERM，intentional_waiter_stop.json保留原因；当前action_stop_seed42_v2与其他任务未收信号。这不是模型/训练OOM或门槛失败。
+- dispatch_native_n1.py现显式清除空的CPU可见性覆盖，保留非空用户映射，并读回真实等待进程的可见性环境；新CPU测试还用实际子进程验证覆盖未被继承。恢复用新root logs/pi05_native_n1_20260911/attempt_02，不复用旧root的waiting状态；正式输出仍checkpoints/pi05_piper_native/n1_action_stop_seed42_v1，因为任何N1训练都尚未开始。实际恢复派发必须看attempt_02/dispatch_verified.json。
+- N1模型/训练/数学代码与首次实现commit5f3408a不变，只修改CPU派发环境与预检。attempt_01/source_manifest不重写，所有证据保留；新实现修复提交后再派发attempt_02。W&B仍同一专用视图，不创建重复view/run/提醒。
+
 ## N1实施与接续授权（2026-09-11，实际排队收据为准）
 
 - 用户进一步明确“N1排上队”，现已补齐独立N1入口；仅native N1，不恢复旧队列。当前action_stop_seed42_v2原样继续，不改其指纹源码。接续顺序是当前formal launcher成功退出（包含最终原生检查）→N1八卡工程门槛→official fresh正式5000步→最终原生检查。非零退出、源码变化或门槛失败即停止N1接续并保留证据，不把失败当成可自动绕过的条件。

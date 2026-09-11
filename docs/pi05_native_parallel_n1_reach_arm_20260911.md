@@ -2,7 +2,7 @@
 
 日期：2026-09-11。用户选择：只进行N1，明确使用left/right arm版本数据。N0及其他对照不安排。
 
-状态更新：用户已进一步授权“N1排上队”。独立实现与CPU预检已完成，正在提交并派发接续程序；实际排队状态必须以日志中的launcher.process.json、phase.json和dispatch_verified.json为准。完整官方模型及八卡工程门槛尚未执行，当前action_stop_seed42_v2继续原样运行。
+状态更新：用户已进一步授权“N1排上队”。独立实现与CPU预检已提交（5f3408a）；首次等待进程因继承CPU-only空CUDA可见性而被有界核验后主动停止，未运行任何N1 GPU任务。修复派发环境后使用新root logs/pi05_native_n1_20260911/attempt_02；实际排队状态以该root的launcher.process.json、phase.json和dispatch_verified.json为准，旧attempt_01留作历史。完整官方模型及八卡工程门槛尚未执行，当前action_stop_seed42_v2继续原样运行。
 
 ## 1. 唯一新实验
 

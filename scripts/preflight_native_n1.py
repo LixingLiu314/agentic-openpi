@@ -24,6 +24,7 @@ from openpi.training.native_subtask_provenance import build_run_config
 from openpi.training.native_subtask_wandb import event_payload
 from run_native_n1 import verify,open_pidfd,matching_process,train_cmd
 from train_native_n1 import parse_args
+from dispatch_native_n1 import queue_environment
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);a=p.parse_args()
@@ -31,6 +32,12 @@ def main():
     tests=subprocess.run([sys.executable,'scripts/test_native_n1.py'],capture_output=True,text=True,check=True)
     (a.root/'cpu_structure.log').write_text(tests.stdout+tests.stderr)
     structural=json.loads(tests.stdout.strip().splitlines()[-1]);assert structural['passed']
+    assert 'CUDA_VISIBLE_DEVICES' not in queue_environment({'CUDA_VISIBLE_DEVICES':'','KEEP':'yes'})
+    assert queue_environment({'CUDA_VISIBLE_DEVICES':'0,1','KEEP':'yes'})=={'CUDA_VISIBLE_DEVICES':'0,1','KEEP':'yes'}
+    visibility=subprocess.check_output([sys.executable,'-c',
+        'import os,json; print(json.dumps(os.environ.get("CUDA_VISIBLE_DEVICES")))'],
+        env=queue_environment(),text=True)
+    assert json.loads(visibility) is None
     child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(0.5)'])
     process=psutil.Process(child.pid)
     record=dict(pid=child.pid,created=process.create_time(),command=process.cmdline())
@@ -76,7 +83,7 @@ def main():
         data_root=dc.local_root,repo_id=dc.repo_id,split_sha256=prov['split_sha256'],norm_sha256=prov['norm_sha256'],
         train_frames=len(dataset),labels=vocabulary,max_target_tokens_including_eos=int(mask.sum(1).max()),
         optimizer_owners=['B','A'],native_text_parameters_only=True,wandb_mapping=True,
-        gpu_checks_performed=False)
+        cpu_only_visibility_not_inherited=True,gpu_checks_performed=False)
     (a.root/'cpu_preflight.json').write_text(json.dumps(result,indent=2)+'\n')
     print(json.dumps(result),flush=True)
 if __name__=='__main__':main()
