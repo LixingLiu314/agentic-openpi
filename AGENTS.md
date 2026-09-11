@@ -1,5 +1,14 @@
 # agentic-openpi server development
 
+## 后续架构硬约束：Subtask 使用 VLM 原生语言生成（2026-09-11）
+
+- 用户明确要求“之后所有都不要出现transformer decoder了”，结合前文指后续方案、代码和新实验不得再新增或沿用独立的 Subtask Transformer decoder（包括当前随机初始化的4层512维S），不能仅更名为其他模块后继续承担同一套独立自回归解码。Subtask 应由 VLM backbone 自身的预训练语言层和原生词表输出路径生成；必要的词表线性投影不等于新增 Transformer decoder。
+- 此约束不禁止 VLM 自身已有的 Transformer 结构，也不要求删除原有 Action expert。当前正在运行的 action_stop_seed42_v2 明确保留，不停止、不热改、不重启；旧模型、checkpoint和历史实验文档保留真实记录，不能追溯改写成原生语言生成。当前训练源码指纹与运行身份保持不变。
+- 后续讨论先核实 VLM 原生文本输入/输出、移位目标、causal mask、CE及KV-cache生成路径，不再以当前独立S为固定前提扩展query。Query和其他后续实验暂缓；本决定只固化后续架构规则，不授权新增训练、部署、机器人动作或修改现有提醒。
+- “由谁生成subtask”和“Action是否读取subtask”是独立决策。本规则不自动恢复S文字回填、S隐藏状态/记忆注入A，也不改变当前CE→B、action→B截断的梯度合同。若保留或重设计历史记忆，须单独明确其接口，不能借此恢复独立S Transformer decoder。
+- 论文架构与公开实现须区分：π0.5论文IV-A/B/C描述同一VLM自回归生成subtask并以subtask条件化动作；openpi README明确当前π0.5入口仅支持flow-matching head。公开入口未接好文本生成不等于需要新decoder；应核验checkpoint词表/输出权重及原生生成能力，不能未经实测声称开箱即可正确生成。来源：https://arxiv.org/html/2504.16054v1 和 https://github.com/Physical-Intelligence/openpi 。
+- 不再把“subtask作为低层条件”本身判定为OOD或已证实的性能根因。论文监督目标和标注描述支持GT条件/teacher-forcing解读，推理使用模型生成subtask，存在token级和高低层条件级训练—推理差异；论文未披露完整采样替换实现，不能臆称已用scheduled sampling消除gap。当前并行A在训练/推理均不读取subtask，因此没有这条GT→预测subtask的动作条件差异。复用词表不等于复用预训练语言生成能力；独立decoder是否导致性能差仍须证据，不能把架构偏离直接当成已证实因果。
+
 ## Git提交习惯（用户明确要求，2026-09-11）
 
 - 阶段性代码、测试、配置和文档修改完成并通过适当检查后，及时在服务器项目仓库创建范围清晰的git commit；进入下一项架构/实验工作前，先提交上一阶段尚未提交的相关修改。不要长期把项目实现全部留在未跟踪文件中。
