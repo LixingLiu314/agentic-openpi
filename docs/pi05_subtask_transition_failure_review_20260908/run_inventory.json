@@ -1,0 +1,327 @@
+[
+  {
+    "run": "20260908_092754_d926711e75",
+    "queries": 71,
+    "checkpoint": "checkpoints/pi05_piper_stage1/m3_pilot_seed42/step_003500",
+    "variant": null,
+    "experimental": null,
+    "status": {
+      "steps": 1050,
+      "queries": 71,
+      "executing": true,
+      "started": 1788830874.5671332,
+      "status": "interrupted",
+      "phase": "STOPPED",
+      "reset_steps": 191,
+      "ended": 1788830933.0250921
+    },
+    "prompt": "Put the eggplant into the box",
+    "seconds": 58.233333333333334,
+    "counts": {
+      "reach the handle of the lid": 33,
+      "Grasp the handle of the lid": 3,
+      "Move away the lid": 11,
+      "reach the eggplant": 6,
+      "grasp the eggplant": 2,
+      "Move the eggplant on the box": 4,
+      "Release the eggplant to the box": 1,
+      "Put the lid on the box": 11
+    },
+    "segments": [
+      {
+        "subtask": "reach the handle of the lid",
+        "first": 1,
+        "last": 33
+      },
+      {
+        "subtask": "Grasp the handle of the lid",
+        "first": 34,
+        "last": 36
+      },
+      {
+        "subtask": "Move away the lid",
+        "first": 37,
+        "last": 47
+      },
+      {
+        "subtask": "reach the eggplant",
+        "first": 48,
+        "last": 53
+      },
+      {
+        "subtask": "grasp the eggplant",
+        "first": 54,
+        "last": 55
+      },
+      {
+        "subtask": "Move the eggplant on the box",
+        "first": 56,
+        "last": 59
+      },
+      {
+        "subtask": "Release the eggplant to the box",
+        "first": 60,
+        "last": 60
+      },
+      {
+        "subtask": "Put the lid on the box",
+        "first": 61,
+        "last": 71
+      }
+    ]
+  },
+  {
+    "run": "20260908_094717_9069f69e04",
+    "queries": 37,
+    "checkpoint": "/home/agilex/agentic-openpi/checkpoints/pi05_piper_stage1/m3_pilot_seed42/step_003500",
+    "variant": null,
+    "experimental": null,
+    "status": {
+      "steps": 545,
+      "queries": 37,
+      "executing": true,
+      "status": "interrupted",
+      "phase": "STOPPED",
+      "recording": true,
+      "started": 1788832045.0195963,
+      "ended": 1788832071.8062663
+    },
+    "prompt": "Put the eggplant into the box",
+    "seconds": 26.766666666666666,
+    "counts": {
+      "reach the handle of the lid": 12,
+      "Grasp the handle of the lid": 10,
+      "Move away the lid": 15
+    },
+    "segments": [
+      {
+        "subtask": "reach the handle of the lid",
+        "first": 1,
+        "last": 11
+      },
+      {
+        "subtask": "Grasp the handle of the lid",
+        "first": 12,
+        "last": 12
+      },
+      {
+        "subtask": "reach the handle of the lid",
+        "first": 13,
+        "last": 13
+      },
+      {
+        "subtask": "Grasp the handle of the lid",
+        "first": 14,
+        "last": 16
+      },
+      {
+        "subtask": "Move away the lid",
+        "first": 17,
+        "last": 22
+      },
+      {
+        "subtask": "Grasp the handle of the lid",
+        "first": 23,
+        "last": 28
+      },
+      {
+        "subtask": "Move away the lid",
+        "first": 29,
+        "last": 37
+      }
+    ]
+  },
+  {
+    "run": "20260908_094816_4dc02d0a57",
+    "queries": 101,
+    "checkpoint": "/home/agilex/agentic-openpi/checkpoints/pi05_piper_stage1/m3_pilot_seed42/step_003500",
+    "variant": null,
+    "experimental": null,
+    "status": {
+      "steps": 1514,
+      "queries": 101,
+      "executing": true,
+      "status": "interrupted",
+      "phase": "STOPPED",
+      "recording": true,
+      "started": 1788832104.208982,
+      "ended": 1788832177.8804843
+    },
+    "prompt": "Put the eggplant into the box",
+    "seconds": 73.63333333333334,
+    "counts": {
+      "reach the handle of the lid": 100,
+      "Grasp the handle of the lid": 1
+    },
+    "segments": [
+      {
+        "subtask": "reach the handle of the lid",
+        "first": 1,
+        "last": 72
+      },
+      {
+        "subtask": "Grasp the handle of the lid",
+        "first": 73,
+        "last": 73
+      },
+      {
+        "subtask": "reach the handle of the lid",
+        "first": 74,
+        "last": 101
+      }
+    ]
+  },
+  {
+    "run": "20260908_104826_c6cfaa1590",
+    "queries": 11,
+    "checkpoint": "/home/agilex/agentic-openpi/checkpoints/pi05_piper_transition/r1_seed42/step_001000",
+    "variant": "r1_boundary_ce_v1",
+    "experimental": true,
+    "status": {
+      "steps": 160,
+      "queries": 11,
+      "executing": true,
+      "status": "interrupted",
+      "phase": "STOPPED",
+      "recording": true,
+      "started": 1788835713.9363027,
+      "ended": 1788835722.4537423
+    },
+    "prompt": "Put the eggplant into the box",
+    "seconds": 8.5,
+    "counts": {
+      "reach the handle of the lid": 11
+    },
+    "segments": [
+      {
+        "subtask": "reach the handle of the lid",
+        "first": 1,
+        "last": 11
+      }
+    ]
+  },
+  {
+    "run": "20260908_104915_8608d26a0c",
+    "queries": 98,
+    "checkpoint": "/home/agilex/agentic-openpi/checkpoints/pi05_piper_transition/r1_seed42/step_001000",
+    "variant": "r1_boundary_ce_v1",
+    "experimental": true,
+    "status": {
+      "steps": 1466,
+      "queries": 98,
+      "executing": true,
+      "status": "interrupted",
+      "phase": "STOPPED",
+      "recording": true,
+      "started": 1788835763.4504843,
+      "ended": 1788835834.7394688
+    },
+    "prompt": "Put the eggplant into the box",
+    "seconds": 71.26666666666667,
+    "counts": {
+      "reach the handle of the lid": 66,
+      "Put the lid on the box": 32
+    },
+    "segments": [
+      {
+        "subtask": "reach the handle of the lid",
+        "first": 1,
+        "last": 50
+      },
+      {
+        "subtask": "Put the lid on the box",
+        "first": 51,
+        "last": 51
+      },
+      {
+        "subtask": "reach the handle of the lid",
+        "first": 52,
+        "last": 66
+      },
+      {
+        "subtask": "Put the lid on the box",
+        "first": 67,
+        "last": 70
+      },
+      {
+        "subtask": "reach the handle of the lid",
+        "first": 71,
+        "last": 71
+      },
+      {
+        "subtask": "Put the lid on the box",
+        "first": 72,
+        "last": 98
+      }
+    ]
+  },
+  {
+    "run": "20260908_105213_0c03666b42",
+    "queries": 9,
+    "checkpoint": "/home/agilex/agentic-openpi/checkpoints/pi05_piper_transition/r1_seed42/step_001000",
+    "variant": "r1_boundary_ce_v1",
+    "experimental": true,
+    "status": {
+      "steps": 131,
+      "queries": 9,
+      "executing": true,
+      "status": "interrupted",
+      "phase": "STOPPED",
+      "recording": true,
+      "started": 1788835941.3675718,
+      "ended": 1788835948.4420764
+    },
+    "prompt": "Put the eggplant into the box",
+    "seconds": 7.066666666666666,
+    "counts": {
+      "reach the handle of the lid": 9
+    },
+    "segments": [
+      {
+        "subtask": "reach the handle of the lid",
+        "first": 1,
+        "last": 9
+      }
+    ]
+  },
+  {
+    "run": "20260908_105241_afe075d0b3",
+    "queries": 99,
+    "checkpoint": "/home/agilex/agentic-openpi/checkpoints/pi05_piper_transition/r1_seed42/step_001000",
+    "variant": "r1_boundary_ce_v1",
+    "experimental": true,
+    "status": {
+      "steps": 1470,
+      "queries": 99,
+      "executing": true,
+      "status": "interrupted",
+      "phase": "STOPPED",
+      "recording": true,
+      "started": 1788835969.0505693,
+      "ended": 1788836040.507316
+    },
+    "prompt": "Put the eggplant into the box",
+    "seconds": 71.43333333333334,
+    "counts": {
+      "reach the handle of the lid": 97,
+      "Put the lid on the box": 2
+    },
+    "segments": [
+      {
+        "subtask": "reach the handle of the lid",
+        "first": 1,
+        "last": 93
+      },
+      {
+        "subtask": "Put the lid on the box",
+        "first": 94,
+        "last": 95
+      },
+      {
+        "subtask": "reach the handle of the lid",
+        "first": 96,
+        "last": 99
+      }
+    ]
+  }
+]

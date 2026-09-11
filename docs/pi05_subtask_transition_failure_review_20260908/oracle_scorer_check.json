@@ -1,0 +1,26 @@
+{
+  "dense": {
+    "stable": 140,
+    "failed_or_unconfirmed": 0,
+    "short_stage": 0,
+    "no_observation_in_successor": 0
+  },
+  "0.0": {
+    "stable": 134,
+    "failed_or_unconfirmed": 6,
+    "short_stage": 0,
+    "no_observation_in_successor": 0
+  },
+  "0.255": {
+    "stable": 136,
+    "failed_or_unconfirmed": 4,
+    "short_stage": 0,
+    "no_observation_in_successor": 0
+  },
+  "0.509": {
+    "stable": 134,
+    "failed_or_unconfirmed": 6,
+    "short_stage": 0,
+    "no_observation_in_successor": 0
+  }
+}

@@ -1,0 +1,2348 @@
+{
+  "sampling": {
+    "draws": 32000,
+    "unique_frames": 27157,
+    "duplicate_draw_fraction": 0.15134375,
+    "boundary_draws": 16000,
+    "class_exposure": [
+      {
+        "label": "reach the handle of the lid",
+        "natural_count": 21150,
+        "natural_fraction": 0.1993797075764289,
+        "sampled_count": 5136,
+        "sampled_fraction": 0.1605
+      },
+      {
+        "label": "Grasp the handle of the lid",
+        "natural_count": 8351,
+        "natural_fraction": 0.078724346948972,
+        "sampled_count": 3073,
+        "sampled_fraction": 0.09603125
+      },
+      {
+        "label": "Move away the lid",
+        "natural_count": 9886,
+        "natural_fraction": 0.0931946945201218,
+        "sampled_count": 3387,
+        "sampled_fraction": 0.10584375
+      },
+      {
+        "label": "reach the eggplant",
+        "natural_count": 9177,
+        "natural_fraction": 0.08651099652146042,
+        "sampled_count": 2644,
+        "sampled_fraction": 0.082625
+      },
+      {
+        "label": "grasp the eggplant",
+        "natural_count": 3795,
+        "natural_fraction": 0.035775224125415964,
+        "sampled_count": 1496,
+        "sampled_fraction": 0.04675
+      },
+      {
+        "label": "Move the eggplant on the box",
+        "natural_count": 5869,
+        "natural_fraction": 0.05532669048539296,
+        "sampled_count": 1914,
+        "sampled_fraction": 0.0598125
+      },
+      {
+        "label": "Release the eggplant to the box",
+        "natural_count": 3792,
+        "natural_fraction": 0.03574694331583066,
+        "sampled_count": 1437,
+        "sampled_fraction": 0.04490625
+      },
+      {
+        "label": "Put the lid on the box",
+        "natural_count": 21975,
+        "natural_fraction": 0.20715693021238887,
+        "sampled_count": 5498,
+        "sampled_fraction": 0.1718125
+      },
+      {
+        "label": "reach the sweet potato",
+        "natural_count": 8293,
+        "natural_fraction": 0.07817758463032268,
+        "sampled_count": 2499,
+        "sampled_fraction": 0.07809375
+      },
+      {
+        "label": "grasp the sweet potato",
+        "natural_count": 4237,
+        "natural_fraction": 0.03994193007098483,
+        "sampled_count": 1553,
+        "sampled_fraction": 0.04853125
+      },
+      {
+        "label": "Move the sweet potato on the box",
+        "natural_count": 5570,
+        "natural_fraction": 0.052508036463390494,
+        "sampled_count": 1845,
+        "sampled_fraction": 0.05765625
+      },
+      {
+        "label": "Release the sweet potato to the box",
+        "natural_count": 3984,
+        "natural_fraction": 0.037556915129290436,
+        "sampled_count": 1518,
+        "sampled_fraction": 0.0474375
+      }
+    ]
+  },
+  "low_rate_label_observation_opportunities": {
+    "0.0": {
+      "zero": 0,
+      "one": 6,
+      "at_least_two": 134,
+      "events_detail": [
+        {
+          "event_id": "val:18:134",
+          "observations_inside_new_stage": 2,
+          "duration": 1.166666666666667
+        },
+        {
+          "event_id": "val:18:169",
+          "observations_inside_new_stage": 2,
+          "duration": 1.9333333333333327
+        },
+        {
+          "event_id": "val:18:227",
+          "observations_inside_new_stage": 4,
+          "duration": 3.0666666666666664
+        },
+        {
+          "event_id": "val:18:319",
+          "observations_inside_new_stage": 3,
+          "duration": 1.7666666666666675
+        },
+        {
+          "event_id": "val:18:372",
+          "observations_inside_new_stage": 3,
+          "duration": 2.4000000000000004
+        },
+        {
+          "event_id": "val:18:444",
+          "observations_inside_new_stage": 1,
+          "duration": 1.0666666666666664
+        },
+        {
+          "event_id": "val:18:476",
+          "observations_inside_new_stage": 7,
+          "duration": 5.0
+        },
+        {
+          "event_id": "val:21:104",
+          "observations_inside_new_stage": 2,
+          "duration": 1.666666666666667
+        },
+        {
+          "event_id": "val:21:154",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5999999999999996
+        },
+        {
+          "event_id": "val:21:202",
+          "observations_inside_new_stage": 4,
+          "duration": 2.9333333333333327
+        },
+        {
+          "event_id": "val:21:290",
+          "observations_inside_new_stage": 1,
+          "duration": 0.9333333333333336
+        },
+        {
+          "event_id": "val:21:318",
+          "observations_inside_new_stage": 4,
+          "duration": 2.4333333333333336
+        },
+        {
+          "event_id": "val:21:391",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5
+        },
+        {
+          "event_id": "val:21:436",
+          "observations_inside_new_stage": 5,
+          "duration": 4.033333333333337
+        },
+        {
+          "event_id": "val:27:131",
+          "observations_inside_new_stage": 2,
+          "duration": 1.4666666666666668
+        },
+        {
+          "event_id": "val:27:175",
+          "observations_inside_new_stage": 3,
+          "duration": 1.8666666666666671
+        },
+        {
+          "event_id": "val:27:231",
+          "observations_inside_new_stage": 4,
+          "duration": 3.2
+        },
+        {
+          "event_id": "val:27:327",
+          "observations_inside_new_stage": 1,
+          "duration": 0.8666666666666671
+        },
+        {
+          "event_id": "val:27:353",
+          "observations_inside_new_stage": 3,
+          "duration": 2.0
+        },
+        {
+          "event_id": "val:27:413",
+          "observations_inside_new_stage": 2,
+          "duration": 1.666666666666666
+        },
+        {
+          "event_id": "val:27:463",
+          "observations_inside_new_stage": 5,
+          "duration": 3.866666666666667
+        },
+        {
+          "event_id": "val:33:135",
+          "observations_inside_new_stage": 2,
+          "duration": 1.3666666666666663
+        },
+        {
+          "event_id": "val:33:176",
+          "observations_inside_new_stage": 3,
+          "duration": 2.166666666666667
+        },
+        {
+          "event_id": "val:33:241",
+          "observations_inside_new_stage": 5,
+          "duration": 3.5999999999999996
+        },
+        {
+          "event_id": "val:33:349",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5333333333333332
+        },
+        {
+          "event_id": "val:33:395",
+          "observations_inside_new_stage": 2,
+          "duration": 1.9000000000000004
+        },
+        {
+          "event_id": "val:33:452",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6000000000000014
+        },
+        {
+          "event_id": "val:33:500",
+          "observations_inside_new_stage": 5,
+          "duration": 3.866666666666667
+        },
+        {
+          "event_id": "val:39:120",
+          "observations_inside_new_stage": 2,
+          "duration": 2.0
+        },
+        {
+          "event_id": "val:39:180",
+          "observations_inside_new_stage": 3,
+          "duration": 1.9000000000000004
+        },
+        {
+          "event_id": "val:39:237",
+          "observations_inside_new_stage": 3,
+          "duration": 2.633333333333333
+        },
+        {
+          "event_id": "val:39:316",
+          "observations_inside_new_stage": 2,
+          "duration": 1.4666666666666668
+        },
+        {
+          "event_id": "val:39:360",
+          "observations_inside_new_stage": 3,
+          "duration": 2.366666666666667
+        },
+        {
+          "event_id": "val:39:431",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6666666666666679
+        },
+        {
+          "event_id": "val:39:481",
+          "observations_inside_new_stage": 6,
+          "duration": 4.166666666666668
+        },
+        {
+          "event_id": "val:40:168",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6333333333333337
+        },
+        {
+          "event_id": "val:40:217",
+          "observations_inside_new_stage": 3,
+          "duration": 2.333333333333333
+        },
+        {
+          "event_id": "val:40:287",
+          "observations_inside_new_stage": 4,
+          "duration": 2.7666666666666675
+        },
+        {
+          "event_id": "val:40:370",
+          "observations_inside_new_stage": 2,
+          "duration": 1.4333333333333336
+        },
+        {
+          "event_id": "val:40:413",
+          "observations_inside_new_stage": 3,
+          "duration": 2.5999999999999996
+        },
+        {
+          "event_id": "val:40:491",
+          "observations_inside_new_stage": 2,
+          "duration": 1.4333333333333336
+        },
+        {
+          "event_id": "val:40:534",
+          "observations_inside_new_stage": 7,
+          "duration": 5.5
+        },
+        {
+          "event_id": "val:51:153",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5
+        },
+        {
+          "event_id": "val:51:198",
+          "observations_inside_new_stage": 4,
+          "duration": 2.833333333333334
+        },
+        {
+          "event_id": "val:51:283",
+          "observations_inside_new_stage": 6,
+          "duration": 4.4
+        },
+        {
+          "event_id": "val:51:415",
+          "observations_inside_new_stage": 1,
+          "duration": 1.2333333333333325
+        },
+        {
+          "event_id": "val:51:452",
+          "observations_inside_new_stage": 4,
+          "duration": 2.6000000000000014
+        },
+        {
+          "event_id": "val:51:530",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6333333333333329
+        },
+        {
+          "event_id": "val:51:579",
+          "observations_inside_new_stage": 7,
+          "duration": 5.733333333333334
+        },
+        {
+          "event_id": "val:57:159",
+          "observations_inside_new_stage": 3,
+          "duration": 1.6000000000000005
+        },
+        {
+          "event_id": "val:57:207",
+          "observations_inside_new_stage": 4,
+          "duration": 3.5999999999999996
+        },
+        {
+          "event_id": "val:57:315",
+          "observations_inside_new_stage": 5,
+          "duration": 3.966666666666667
+        },
+        {
+          "event_id": "val:57:434",
+          "observations_inside_new_stage": 2,
+          "duration": 1.4666666666666668
+        },
+        {
+          "event_id": "val:57:478",
+          "observations_inside_new_stage": 4,
+          "duration": 2.466666666666665
+        },
+        {
+          "event_id": "val:57:552",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7666666666666693
+        },
+        {
+          "event_id": "val:57:605",
+          "observations_inside_new_stage": 10,
+          "duration": 7.966666666666669
+        },
+        {
+          "event_id": "val:78:149",
+          "observations_inside_new_stage": 2,
+          "duration": 1.4666666666666668
+        },
+        {
+          "event_id": "val:78:193",
+          "observations_inside_new_stage": 3,
+          "duration": 2.4333333333333336
+        },
+        {
+          "event_id": "val:78:266",
+          "observations_inside_new_stage": 6,
+          "duration": 4.2333333333333325
+        },
+        {
+          "event_id": "val:78:393",
+          "observations_inside_new_stage": 3,
+          "duration": 2.633333333333333
+        },
+        {
+          "event_id": "val:78:472",
+          "observations_inside_new_stage": 3,
+          "duration": 2.533333333333333
+        },
+        {
+          "event_id": "val:78:548",
+          "observations_inside_new_stage": 3,
+          "duration": 2.133333333333333
+        },
+        {
+          "event_id": "val:78:612",
+          "observations_inside_new_stage": 7,
+          "duration": 5.133333333333336
+        },
+        {
+          "event_id": "val:96:111",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5
+        },
+        {
+          "event_id": "val:96:156",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5333333333333332
+        },
+        {
+          "event_id": "val:96:202",
+          "observations_inside_new_stage": 6,
+          "duration": 3.966666666666666
+        },
+        {
+          "event_id": "val:96:321",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7666666666666675
+        },
+        {
+          "event_id": "val:96:374",
+          "observations_inside_new_stage": 5,
+          "duration": 3.7333333333333325
+        },
+        {
+          "event_id": "val:96:486",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6666666666666679
+        },
+        {
+          "event_id": "val:96:536",
+          "observations_inside_new_stage": 5,
+          "duration": 3.900000000000002
+        },
+        {
+          "event_id": "val:106:107",
+          "observations_inside_new_stage": 3,
+          "duration": 1.7999999999999994
+        },
+        {
+          "event_id": "val:106:161",
+          "observations_inside_new_stage": 3,
+          "duration": 2.9666666666666677
+        },
+        {
+          "event_id": "val:106:250",
+          "observations_inside_new_stage": 6,
+          "duration": 4.433333333333334
+        },
+        {
+          "event_id": "val:106:383",
+          "observations_inside_new_stage": 2,
+          "duration": 1.3333333333333321
+        },
+        {
+          "event_id": "val:106:423",
+          "observations_inside_new_stage": 3,
+          "duration": 2.4333333333333353
+        },
+        {
+          "event_id": "val:106:496",
+          "observations_inside_new_stage": 3,
+          "duration": 1.8999999999999986
+        },
+        {
+          "event_id": "val:106:553",
+          "observations_inside_new_stage": 5,
+          "duration": 4.5
+        },
+        {
+          "event_id": "val:125:105",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5999999999999996
+        },
+        {
+          "event_id": "val:125:153",
+          "observations_inside_new_stage": 3,
+          "duration": 1.9000000000000004
+        },
+        {
+          "event_id": "val:125:210",
+          "observations_inside_new_stage": 11,
+          "duration": 8.433333333333334
+        },
+        {
+          "event_id": "val:125:463",
+          "observations_inside_new_stage": 2,
+          "duration": 1.966666666666665
+        },
+        {
+          "event_id": "val:125:522",
+          "observations_inside_new_stage": 3,
+          "duration": 2.2666666666666693
+        },
+        {
+          "event_id": "val:125:590",
+          "observations_inside_new_stage": 3,
+          "duration": 1.7666666666666657
+        },
+        {
+          "event_id": "val:125:643",
+          "observations_inside_new_stage": 5,
+          "duration": 4.166666666666668
+        },
+        {
+          "event_id": "val:133:127",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5666666666666664
+        },
+        {
+          "event_id": "val:133:174",
+          "observations_inside_new_stage": 3,
+          "duration": 2.166666666666667
+        },
+        {
+          "event_id": "val:133:239",
+          "observations_inside_new_stage": 5,
+          "duration": 4.166666666666666
+        },
+        {
+          "event_id": "val:133:364",
+          "observations_inside_new_stage": 3,
+          "duration": 1.8666666666666671
+        },
+        {
+          "event_id": "val:133:420",
+          "observations_inside_new_stage": 3,
+          "duration": 2.0666666666666664
+        },
+        {
+          "event_id": "val:133:482",
+          "observations_inside_new_stage": 1,
+          "duration": 1.3333333333333321
+        },
+        {
+          "event_id": "val:133:522",
+          "observations_inside_new_stage": 7,
+          "duration": 5.06666666666667
+        },
+        {
+          "event_id": "val:137:107",
+          "observations_inside_new_stage": 2,
+          "duration": 1.2999999999999994
+        },
+        {
+          "event_id": "val:137:146",
+          "observations_inside_new_stage": 3,
+          "duration": 2.2666666666666675
+        },
+        {
+          "event_id": "val:137:214",
+          "observations_inside_new_stage": 4,
+          "duration": 3.3666666666666663
+        },
+        {
+          "event_id": "val:137:315",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5
+        },
+        {
+          "event_id": "val:137:360",
+          "observations_inside_new_stage": 3,
+          "duration": 2.3000000000000007
+        },
+        {
+          "event_id": "val:137:429",
+          "observations_inside_new_stage": 3,
+          "duration": 2.133333333333333
+        },
+        {
+          "event_id": "val:137:493",
+          "observations_inside_new_stage": 6,
+          "duration": 4.966666666666669
+        },
+        {
+          "event_id": "val:139:140",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7999999999999998
+        },
+        {
+          "event_id": "val:139:194",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7666666666666657
+        },
+        {
+          "event_id": "val:139:247",
+          "observations_inside_new_stage": 4,
+          "duration": 3.0
+        },
+        {
+          "event_id": "val:139:337",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6666666666666679
+        },
+        {
+          "event_id": "val:139:387",
+          "observations_inside_new_stage": 4,
+          "duration": 2.7666666666666657
+        },
+        {
+          "event_id": "val:139:470",
+          "observations_inside_new_stage": 2,
+          "duration": 1.866666666666669
+        },
+        {
+          "event_id": "val:139:526",
+          "observations_inside_new_stage": 6,
+          "duration": 4.300000000000001
+        },
+        {
+          "event_id": "val:141:130",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7666666666666666
+        },
+        {
+          "event_id": "val:141:183",
+          "observations_inside_new_stage": 3,
+          "duration": 2.0
+        },
+        {
+          "event_id": "val:141:243",
+          "observations_inside_new_stage": 5,
+          "duration": 3.4333333333333336
+        },
+        {
+          "event_id": "val:141:346",
+          "observations_inside_new_stage": 1,
+          "duration": 1.333333333333334
+        },
+        {
+          "event_id": "val:141:386",
+          "observations_inside_new_stage": 3,
+          "duration": 1.9333333333333336
+        },
+        {
+          "event_id": "val:141:444",
+          "observations_inside_new_stage": 2,
+          "duration": 1.8666666666666671
+        },
+        {
+          "event_id": "val:141:500",
+          "observations_inside_new_stage": 6,
+          "duration": 4.733333333333334
+        },
+        {
+          "event_id": "val:144:101",
+          "observations_inside_new_stage": 3,
+          "duration": 2.4666666666666663
+        },
+        {
+          "event_id": "val:144:175",
+          "observations_inside_new_stage": 3,
+          "duration": 2.333333333333333
+        },
+        {
+          "event_id": "val:144:245",
+          "observations_inside_new_stage": 4,
+          "duration": 3.200000000000001
+        },
+        {
+          "event_id": "val:144:341",
+          "observations_inside_new_stage": 3,
+          "duration": 1.6333333333333329
+        },
+        {
+          "event_id": "val:144:390",
+          "observations_inside_new_stage": 3,
+          "duration": 2.633333333333333
+        },
+        {
+          "event_id": "val:144:469",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6333333333333329
+        },
+        {
+          "event_id": "val:144:518",
+          "observations_inside_new_stage": 7,
+          "duration": 5.06666666666667
+        },
+        {
+          "event_id": "val:145:136",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5666666666666664
+        },
+        {
+          "event_id": "val:145:183",
+          "observations_inside_new_stage": 3,
+          "duration": 1.833333333333334
+        },
+        {
+          "event_id": "val:145:238",
+          "observations_inside_new_stage": 4,
+          "duration": 2.833333333333334
+        },
+        {
+          "event_id": "val:145:323",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5666666666666664
+        },
+        {
+          "event_id": "val:145:370",
+          "observations_inside_new_stage": 3,
+          "duration": 2.5
+        },
+        {
+          "event_id": "val:145:445",
+          "observations_inside_new_stage": 2,
+          "duration": 1.700000000000001
+        },
+        {
+          "event_id": "val:145:496",
+          "observations_inside_new_stage": 5,
+          "duration": 4.0
+        },
+        {
+          "event_id": "val:155:126",
+          "observations_inside_new_stage": 2,
+          "duration": 1.3666666666666663
+        },
+        {
+          "event_id": "val:155:167",
+          "observations_inside_new_stage": 3,
+          "duration": 2.1000000000000005
+        },
+        {
+          "event_id": "val:155:230",
+          "observations_inside_new_stage": 4,
+          "duration": 3.7
+        },
+        {
+          "event_id": "val:155:341",
+          "observations_inside_new_stage": 3,
+          "duration": 1.6999999999999993
+        },
+        {
+          "event_id": "val:155:392",
+          "observations_inside_new_stage": 2,
+          "duration": 1.9666666666666668
+        },
+        {
+          "event_id": "val:155:451",
+          "observations_inside_new_stage": 2,
+          "duration": 1.666666666666666
+        },
+        {
+          "event_id": "val:155:501",
+          "observations_inside_new_stage": 10,
+          "duration": 7.133333333333336
+        },
+        {
+          "event_id": "val:178:141",
+          "observations_inside_new_stage": 2,
+          "duration": 2.166666666666666
+        },
+        {
+          "event_id": "val:178:206",
+          "observations_inside_new_stage": 3,
+          "duration": 2.2
+        },
+        {
+          "event_id": "val:178:272",
+          "observations_inside_new_stage": 5,
+          "duration": 3.5666666666666664
+        },
+        {
+          "event_id": "val:178:379",
+          "observations_inside_new_stage": 3,
+          "duration": 2.1333333333333346
+        },
+        {
+          "event_id": "val:178:443",
+          "observations_inside_new_stage": 3,
+          "duration": 2.4999999999999982
+        },
+        {
+          "event_id": "val:178:518",
+          "observations_inside_new_stage": 3,
+          "duration": 2.366666666666667
+        },
+        {
+          "event_id": "val:178:589",
+          "observations_inside_new_stage": 7,
+          "duration": 5.300000000000001
+        }
+      ]
+    },
+    "0.255": {
+      "zero": 0,
+      "one": 4,
+      "at_least_two": 136,
+      "events_detail": [
+        {
+          "event_id": "val:18:134",
+          "observations_inside_new_stage": 2,
+          "duration": 1.166666666666667
+        },
+        {
+          "event_id": "val:18:169",
+          "observations_inside_new_stage": 2,
+          "duration": 1.9333333333333327
+        },
+        {
+          "event_id": "val:18:227",
+          "observations_inside_new_stage": 4,
+          "duration": 3.0666666666666664
+        },
+        {
+          "event_id": "val:18:319",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7666666666666675
+        },
+        {
+          "event_id": "val:18:372",
+          "observations_inside_new_stage": 4,
+          "duration": 2.4000000000000004
+        },
+        {
+          "event_id": "val:18:444",
+          "observations_inside_new_stage": 1,
+          "duration": 1.0666666666666664
+        },
+        {
+          "event_id": "val:18:476",
+          "observations_inside_new_stage": 6,
+          "duration": 5.0
+        },
+        {
+          "event_id": "val:21:104",
+          "observations_inside_new_stage": 2,
+          "duration": 1.666666666666667
+        },
+        {
+          "event_id": "val:21:154",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5999999999999996
+        },
+        {
+          "event_id": "val:21:202",
+          "observations_inside_new_stage": 4,
+          "duration": 2.9333333333333327
+        },
+        {
+          "event_id": "val:21:290",
+          "observations_inside_new_stage": 1,
+          "duration": 0.9333333333333336
+        },
+        {
+          "event_id": "val:21:318",
+          "observations_inside_new_stage": 3,
+          "duration": 2.4333333333333336
+        },
+        {
+          "event_id": "val:21:391",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5
+        },
+        {
+          "event_id": "val:21:436",
+          "observations_inside_new_stage": 5,
+          "duration": 4.033333333333337
+        },
+        {
+          "event_id": "val:27:131",
+          "observations_inside_new_stage": 2,
+          "duration": 1.4666666666666668
+        },
+        {
+          "event_id": "val:27:175",
+          "observations_inside_new_stage": 2,
+          "duration": 1.8666666666666671
+        },
+        {
+          "event_id": "val:27:231",
+          "observations_inside_new_stage": 4,
+          "duration": 3.2
+        },
+        {
+          "event_id": "val:27:327",
+          "observations_inside_new_stage": 2,
+          "duration": 0.8666666666666671
+        },
+        {
+          "event_id": "val:27:353",
+          "observations_inside_new_stage": 2,
+          "duration": 2.0
+        },
+        {
+          "event_id": "val:27:413",
+          "observations_inside_new_stage": 2,
+          "duration": 1.666666666666666
+        },
+        {
+          "event_id": "val:27:463",
+          "observations_inside_new_stage": 5,
+          "duration": 3.866666666666667
+        },
+        {
+          "event_id": "val:33:135",
+          "observations_inside_new_stage": 2,
+          "duration": 1.3666666666666663
+        },
+        {
+          "event_id": "val:33:176",
+          "observations_inside_new_stage": 3,
+          "duration": 2.166666666666667
+        },
+        {
+          "event_id": "val:33:241",
+          "observations_inside_new_stage": 4,
+          "duration": 3.5999999999999996
+        },
+        {
+          "event_id": "val:33:349",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5333333333333332
+        },
+        {
+          "event_id": "val:33:395",
+          "observations_inside_new_stage": 3,
+          "duration": 1.9000000000000004
+        },
+        {
+          "event_id": "val:33:452",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6000000000000014
+        },
+        {
+          "event_id": "val:33:500",
+          "observations_inside_new_stage": 5,
+          "duration": 3.866666666666667
+        },
+        {
+          "event_id": "val:39:120",
+          "observations_inside_new_stage": 3,
+          "duration": 2.0
+        },
+        {
+          "event_id": "val:39:180",
+          "observations_inside_new_stage": 3,
+          "duration": 1.9000000000000004
+        },
+        {
+          "event_id": "val:39:237",
+          "observations_inside_new_stage": 3,
+          "duration": 2.633333333333333
+        },
+        {
+          "event_id": "val:39:316",
+          "observations_inside_new_stage": 2,
+          "duration": 1.4666666666666668
+        },
+        {
+          "event_id": "val:39:360",
+          "observations_inside_new_stage": 3,
+          "duration": 2.366666666666667
+        },
+        {
+          "event_id": "val:39:431",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6666666666666679
+        },
+        {
+          "event_id": "val:39:481",
+          "observations_inside_new_stage": 6,
+          "duration": 4.166666666666668
+        },
+        {
+          "event_id": "val:40:168",
+          "observations_inside_new_stage": 3,
+          "duration": 1.6333333333333337
+        },
+        {
+          "event_id": "val:40:217",
+          "observations_inside_new_stage": 3,
+          "duration": 2.333333333333333
+        },
+        {
+          "event_id": "val:40:287",
+          "observations_inside_new_stage": 3,
+          "duration": 2.7666666666666675
+        },
+        {
+          "event_id": "val:40:370",
+          "observations_inside_new_stage": 2,
+          "duration": 1.4333333333333336
+        },
+        {
+          "event_id": "val:40:413",
+          "observations_inside_new_stage": 4,
+          "duration": 2.5999999999999996
+        },
+        {
+          "event_id": "val:40:491",
+          "observations_inside_new_stage": 1,
+          "duration": 1.4333333333333336
+        },
+        {
+          "event_id": "val:40:534",
+          "observations_inside_new_stage": 8,
+          "duration": 5.5
+        },
+        {
+          "event_id": "val:51:153",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5
+        },
+        {
+          "event_id": "val:51:198",
+          "observations_inside_new_stage": 4,
+          "duration": 2.833333333333334
+        },
+        {
+          "event_id": "val:51:283",
+          "observations_inside_new_stage": 5,
+          "duration": 4.4
+        },
+        {
+          "event_id": "val:51:415",
+          "observations_inside_new_stage": 2,
+          "duration": 1.2333333333333325
+        },
+        {
+          "event_id": "val:51:452",
+          "observations_inside_new_stage": 3,
+          "duration": 2.6000000000000014
+        },
+        {
+          "event_id": "val:51:530",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6333333333333329
+        },
+        {
+          "event_id": "val:51:579",
+          "observations_inside_new_stage": 8,
+          "duration": 5.733333333333334
+        },
+        {
+          "event_id": "val:57:159",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6000000000000005
+        },
+        {
+          "event_id": "val:57:207",
+          "observations_inside_new_stage": 5,
+          "duration": 3.5999999999999996
+        },
+        {
+          "event_id": "val:57:315",
+          "observations_inside_new_stage": 5,
+          "duration": 3.966666666666667
+        },
+        {
+          "event_id": "val:57:434",
+          "observations_inside_new_stage": 2,
+          "duration": 1.4666666666666668
+        },
+        {
+          "event_id": "val:57:478",
+          "observations_inside_new_stage": 3,
+          "duration": 2.466666666666665
+        },
+        {
+          "event_id": "val:57:552",
+          "observations_inside_new_stage": 3,
+          "duration": 1.7666666666666693
+        },
+        {
+          "event_id": "val:57:605",
+          "observations_inside_new_stage": 10,
+          "duration": 7.966666666666669
+        },
+        {
+          "event_id": "val:78:149",
+          "observations_inside_new_stage": 2,
+          "duration": 1.4666666666666668
+        },
+        {
+          "event_id": "val:78:193",
+          "observations_inside_new_stage": 3,
+          "duration": 2.4333333333333336
+        },
+        {
+          "event_id": "val:78:266",
+          "observations_inside_new_stage": 5,
+          "duration": 4.2333333333333325
+        },
+        {
+          "event_id": "val:78:393",
+          "observations_inside_new_stage": 4,
+          "duration": 2.633333333333333
+        },
+        {
+          "event_id": "val:78:472",
+          "observations_inside_new_stage": 3,
+          "duration": 2.533333333333333
+        },
+        {
+          "event_id": "val:78:548",
+          "observations_inside_new_stage": 3,
+          "duration": 2.133333333333333
+        },
+        {
+          "event_id": "val:78:612",
+          "observations_inside_new_stage": 7,
+          "duration": 5.133333333333336
+        },
+        {
+          "event_id": "val:96:111",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5
+        },
+        {
+          "event_id": "val:96:156",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5333333333333332
+        },
+        {
+          "event_id": "val:96:202",
+          "observations_inside_new_stage": 5,
+          "duration": 3.966666666666666
+        },
+        {
+          "event_id": "val:96:321",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7666666666666675
+        },
+        {
+          "event_id": "val:96:374",
+          "observations_inside_new_stage": 5,
+          "duration": 3.7333333333333325
+        },
+        {
+          "event_id": "val:96:486",
+          "observations_inside_new_stage": 3,
+          "duration": 1.6666666666666679
+        },
+        {
+          "event_id": "val:96:536",
+          "observations_inside_new_stage": 5,
+          "duration": 3.900000000000002
+        },
+        {
+          "event_id": "val:106:107",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7999999999999994
+        },
+        {
+          "event_id": "val:106:161",
+          "observations_inside_new_stage": 4,
+          "duration": 2.9666666666666677
+        },
+        {
+          "event_id": "val:106:250",
+          "observations_inside_new_stage": 6,
+          "duration": 4.433333333333334
+        },
+        {
+          "event_id": "val:106:383",
+          "observations_inside_new_stage": 2,
+          "duration": 1.3333333333333321
+        },
+        {
+          "event_id": "val:106:423",
+          "observations_inside_new_stage": 3,
+          "duration": 2.4333333333333353
+        },
+        {
+          "event_id": "val:106:496",
+          "observations_inside_new_stage": 2,
+          "duration": 1.8999999999999986
+        },
+        {
+          "event_id": "val:106:553",
+          "observations_inside_new_stage": 6,
+          "duration": 4.5
+        },
+        {
+          "event_id": "val:125:105",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5999999999999996
+        },
+        {
+          "event_id": "val:125:153",
+          "observations_inside_new_stage": 2,
+          "duration": 1.9000000000000004
+        },
+        {
+          "event_id": "val:125:210",
+          "observations_inside_new_stage": 11,
+          "duration": 8.433333333333334
+        },
+        {
+          "event_id": "val:125:463",
+          "observations_inside_new_stage": 3,
+          "duration": 1.966666666666665
+        },
+        {
+          "event_id": "val:125:522",
+          "observations_inside_new_stage": 3,
+          "duration": 2.2666666666666693
+        },
+        {
+          "event_id": "val:125:590",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7666666666666657
+        },
+        {
+          "event_id": "val:125:643",
+          "observations_inside_new_stage": 6,
+          "duration": 4.166666666666668
+        },
+        {
+          "event_id": "val:133:127",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5666666666666664
+        },
+        {
+          "event_id": "val:133:174",
+          "observations_inside_new_stage": 3,
+          "duration": 2.166666666666667
+        },
+        {
+          "event_id": "val:133:239",
+          "observations_inside_new_stage": 5,
+          "duration": 4.166666666666666
+        },
+        {
+          "event_id": "val:133:364",
+          "observations_inside_new_stage": 2,
+          "duration": 1.8666666666666671
+        },
+        {
+          "event_id": "val:133:420",
+          "observations_inside_new_stage": 3,
+          "duration": 2.0666666666666664
+        },
+        {
+          "event_id": "val:133:482",
+          "observations_inside_new_stage": 2,
+          "duration": 1.3333333333333321
+        },
+        {
+          "event_id": "val:133:522",
+          "observations_inside_new_stage": 7,
+          "duration": 5.06666666666667
+        },
+        {
+          "event_id": "val:137:107",
+          "observations_inside_new_stage": 2,
+          "duration": 1.2999999999999994
+        },
+        {
+          "event_id": "val:137:146",
+          "observations_inside_new_stage": 3,
+          "duration": 2.2666666666666675
+        },
+        {
+          "event_id": "val:137:214",
+          "observations_inside_new_stage": 4,
+          "duration": 3.3666666666666663
+        },
+        {
+          "event_id": "val:137:315",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5
+        },
+        {
+          "event_id": "val:137:360",
+          "observations_inside_new_stage": 3,
+          "duration": 2.3000000000000007
+        },
+        {
+          "event_id": "val:137:429",
+          "observations_inside_new_stage": 3,
+          "duration": 2.133333333333333
+        },
+        {
+          "event_id": "val:137:493",
+          "observations_inside_new_stage": 6,
+          "duration": 4.966666666666669
+        },
+        {
+          "event_id": "val:139:140",
+          "observations_inside_new_stage": 3,
+          "duration": 1.7999999999999998
+        },
+        {
+          "event_id": "val:139:194",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7666666666666657
+        },
+        {
+          "event_id": "val:139:247",
+          "observations_inside_new_stage": 4,
+          "duration": 3.0
+        },
+        {
+          "event_id": "val:139:337",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6666666666666679
+        },
+        {
+          "event_id": "val:139:387",
+          "observations_inside_new_stage": 4,
+          "duration": 2.7666666666666657
+        },
+        {
+          "event_id": "val:139:470",
+          "observations_inside_new_stage": 2,
+          "duration": 1.866666666666669
+        },
+        {
+          "event_id": "val:139:526",
+          "observations_inside_new_stage": 6,
+          "duration": 4.300000000000001
+        },
+        {
+          "event_id": "val:141:130",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7666666666666666
+        },
+        {
+          "event_id": "val:141:183",
+          "observations_inside_new_stage": 3,
+          "duration": 2.0
+        },
+        {
+          "event_id": "val:141:243",
+          "observations_inside_new_stage": 4,
+          "duration": 3.4333333333333336
+        },
+        {
+          "event_id": "val:141:346",
+          "observations_inside_new_stage": 2,
+          "duration": 1.333333333333334
+        },
+        {
+          "event_id": "val:141:386",
+          "observations_inside_new_stage": 3,
+          "duration": 1.9333333333333336
+        },
+        {
+          "event_id": "val:141:444",
+          "observations_inside_new_stage": 2,
+          "duration": 1.8666666666666671
+        },
+        {
+          "event_id": "val:141:500",
+          "observations_inside_new_stage": 6,
+          "duration": 4.733333333333334
+        },
+        {
+          "event_id": "val:144:101",
+          "observations_inside_new_stage": 3,
+          "duration": 2.4666666666666663
+        },
+        {
+          "event_id": "val:144:175",
+          "observations_inside_new_stage": 3,
+          "duration": 2.333333333333333
+        },
+        {
+          "event_id": "val:144:245",
+          "observations_inside_new_stage": 4,
+          "duration": 3.200000000000001
+        },
+        {
+          "event_id": "val:144:341",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6333333333333329
+        },
+        {
+          "event_id": "val:144:390",
+          "observations_inside_new_stage": 4,
+          "duration": 2.633333333333333
+        },
+        {
+          "event_id": "val:144:469",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6333333333333329
+        },
+        {
+          "event_id": "val:144:518",
+          "observations_inside_new_stage": 6,
+          "duration": 5.06666666666667
+        },
+        {
+          "event_id": "val:145:136",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5666666666666664
+        },
+        {
+          "event_id": "val:145:183",
+          "observations_inside_new_stage": 3,
+          "duration": 1.833333333333334
+        },
+        {
+          "event_id": "val:145:238",
+          "observations_inside_new_stage": 3,
+          "duration": 2.833333333333334
+        },
+        {
+          "event_id": "val:145:323",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5666666666666664
+        },
+        {
+          "event_id": "val:145:370",
+          "observations_inside_new_stage": 4,
+          "duration": 2.5
+        },
+        {
+          "event_id": "val:145:445",
+          "observations_inside_new_stage": 2,
+          "duration": 1.700000000000001
+        },
+        {
+          "event_id": "val:145:496",
+          "observations_inside_new_stage": 5,
+          "duration": 4.0
+        },
+        {
+          "event_id": "val:155:126",
+          "observations_inside_new_stage": 1,
+          "duration": 1.3666666666666663
+        },
+        {
+          "event_id": "val:155:167",
+          "observations_inside_new_stage": 3,
+          "duration": 2.1000000000000005
+        },
+        {
+          "event_id": "val:155:230",
+          "observations_inside_new_stage": 5,
+          "duration": 3.7
+        },
+        {
+          "event_id": "val:155:341",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6999999999999993
+        },
+        {
+          "event_id": "val:155:392",
+          "observations_inside_new_stage": 3,
+          "duration": 1.9666666666666668
+        },
+        {
+          "event_id": "val:155:451",
+          "observations_inside_new_stage": 2,
+          "duration": 1.666666666666666
+        },
+        {
+          "event_id": "val:155:501",
+          "observations_inside_new_stage": 9,
+          "duration": 7.133333333333336
+        },
+        {
+          "event_id": "val:178:141",
+          "observations_inside_new_stage": 3,
+          "duration": 2.166666666666666
+        },
+        {
+          "event_id": "val:178:206",
+          "observations_inside_new_stage": 3,
+          "duration": 2.2
+        },
+        {
+          "event_id": "val:178:272",
+          "observations_inside_new_stage": 5,
+          "duration": 3.5666666666666664
+        },
+        {
+          "event_id": "val:178:379",
+          "observations_inside_new_stage": 2,
+          "duration": 2.1333333333333346
+        },
+        {
+          "event_id": "val:178:443",
+          "observations_inside_new_stage": 4,
+          "duration": 2.4999999999999982
+        },
+        {
+          "event_id": "val:178:518",
+          "observations_inside_new_stage": 3,
+          "duration": 2.366666666666667
+        },
+        {
+          "event_id": "val:178:589",
+          "observations_inside_new_stage": 7,
+          "duration": 5.300000000000001
+        }
+      ]
+    },
+    "0.509": {
+      "zero": 0,
+      "one": 6,
+      "at_least_two": 134,
+      "events_detail": [
+        {
+          "event_id": "val:18:134",
+          "observations_inside_new_stage": 1,
+          "duration": 1.166666666666667
+        },
+        {
+          "event_id": "val:18:169",
+          "observations_inside_new_stage": 3,
+          "duration": 1.9333333333333327
+        },
+        {
+          "event_id": "val:18:227",
+          "observations_inside_new_stage": 4,
+          "duration": 3.0666666666666664
+        },
+        {
+          "event_id": "val:18:319",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7666666666666675
+        },
+        {
+          "event_id": "val:18:372",
+          "observations_inside_new_stage": 3,
+          "duration": 2.4000000000000004
+        },
+        {
+          "event_id": "val:18:444",
+          "observations_inside_new_stage": 2,
+          "duration": 1.0666666666666664
+        },
+        {
+          "event_id": "val:18:476",
+          "observations_inside_new_stage": 6,
+          "duration": 5.0
+        },
+        {
+          "event_id": "val:21:104",
+          "observations_inside_new_stage": 3,
+          "duration": 1.666666666666667
+        },
+        {
+          "event_id": "val:21:154",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5999999999999996
+        },
+        {
+          "event_id": "val:21:202",
+          "observations_inside_new_stage": 3,
+          "duration": 2.9333333333333327
+        },
+        {
+          "event_id": "val:21:290",
+          "observations_inside_new_stage": 2,
+          "duration": 0.9333333333333336
+        },
+        {
+          "event_id": "val:21:318",
+          "observations_inside_new_stage": 3,
+          "duration": 2.4333333333333336
+        },
+        {
+          "event_id": "val:21:391",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5
+        },
+        {
+          "event_id": "val:21:436",
+          "observations_inside_new_stage": 5,
+          "duration": 4.033333333333337
+        },
+        {
+          "event_id": "val:27:131",
+          "observations_inside_new_stage": 1,
+          "duration": 1.4666666666666668
+        },
+        {
+          "event_id": "val:27:175",
+          "observations_inside_new_stage": 3,
+          "duration": 1.8666666666666671
+        },
+        {
+          "event_id": "val:27:231",
+          "observations_inside_new_stage": 4,
+          "duration": 3.2
+        },
+        {
+          "event_id": "val:27:327",
+          "observations_inside_new_stage": 1,
+          "duration": 0.8666666666666671
+        },
+        {
+          "event_id": "val:27:353",
+          "observations_inside_new_stage": 3,
+          "duration": 2.0
+        },
+        {
+          "event_id": "val:27:413",
+          "observations_inside_new_stage": 2,
+          "duration": 1.666666666666666
+        },
+        {
+          "event_id": "val:27:463",
+          "observations_inside_new_stage": 5,
+          "duration": 3.866666666666667
+        },
+        {
+          "event_id": "val:33:135",
+          "observations_inside_new_stage": 2,
+          "duration": 1.3666666666666663
+        },
+        {
+          "event_id": "val:33:176",
+          "observations_inside_new_stage": 2,
+          "duration": 2.166666666666667
+        },
+        {
+          "event_id": "val:33:241",
+          "observations_inside_new_stage": 5,
+          "duration": 3.5999999999999996
+        },
+        {
+          "event_id": "val:33:349",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5333333333333332
+        },
+        {
+          "event_id": "val:33:395",
+          "observations_inside_new_stage": 3,
+          "duration": 1.9000000000000004
+        },
+        {
+          "event_id": "val:33:452",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6000000000000014
+        },
+        {
+          "event_id": "val:33:500",
+          "observations_inside_new_stage": 5,
+          "duration": 3.866666666666667
+        },
+        {
+          "event_id": "val:39:120",
+          "observations_inside_new_stage": 3,
+          "duration": 2.0
+        },
+        {
+          "event_id": "val:39:180",
+          "observations_inside_new_stage": 2,
+          "duration": 1.9000000000000004
+        },
+        {
+          "event_id": "val:39:237",
+          "observations_inside_new_stage": 4,
+          "duration": 2.633333333333333
+        },
+        {
+          "event_id": "val:39:316",
+          "observations_inside_new_stage": 2,
+          "duration": 1.4666666666666668
+        },
+        {
+          "event_id": "val:39:360",
+          "observations_inside_new_stage": 3,
+          "duration": 2.366666666666667
+        },
+        {
+          "event_id": "val:39:431",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6666666666666679
+        },
+        {
+          "event_id": "val:39:481",
+          "observations_inside_new_stage": 5,
+          "duration": 4.166666666666668
+        },
+        {
+          "event_id": "val:40:168",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6333333333333337
+        },
+        {
+          "event_id": "val:40:217",
+          "observations_inside_new_stage": 3,
+          "duration": 2.333333333333333
+        },
+        {
+          "event_id": "val:40:287",
+          "observations_inside_new_stage": 4,
+          "duration": 2.7666666666666675
+        },
+        {
+          "event_id": "val:40:370",
+          "observations_inside_new_stage": 2,
+          "duration": 1.4333333333333336
+        },
+        {
+          "event_id": "val:40:413",
+          "observations_inside_new_stage": 3,
+          "duration": 2.5999999999999996
+        },
+        {
+          "event_id": "val:40:491",
+          "observations_inside_new_stage": 2,
+          "duration": 1.4333333333333336
+        },
+        {
+          "event_id": "val:40:534",
+          "observations_inside_new_stage": 7,
+          "duration": 5.5
+        },
+        {
+          "event_id": "val:51:153",
+          "observations_inside_new_stage": 1,
+          "duration": 1.5
+        },
+        {
+          "event_id": "val:51:198",
+          "observations_inside_new_stage": 4,
+          "duration": 2.833333333333334
+        },
+        {
+          "event_id": "val:51:283",
+          "observations_inside_new_stage": 6,
+          "duration": 4.4
+        },
+        {
+          "event_id": "val:51:415",
+          "observations_inside_new_stage": 2,
+          "duration": 1.2333333333333325
+        },
+        {
+          "event_id": "val:51:452",
+          "observations_inside_new_stage": 3,
+          "duration": 2.6000000000000014
+        },
+        {
+          "event_id": "val:51:530",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6333333333333329
+        },
+        {
+          "event_id": "val:51:579",
+          "observations_inside_new_stage": 8,
+          "duration": 5.733333333333334
+        },
+        {
+          "event_id": "val:57:159",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6000000000000005
+        },
+        {
+          "event_id": "val:57:207",
+          "observations_inside_new_stage": 5,
+          "duration": 3.5999999999999996
+        },
+        {
+          "event_id": "val:57:315",
+          "observations_inside_new_stage": 5,
+          "duration": 3.966666666666667
+        },
+        {
+          "event_id": "val:57:434",
+          "observations_inside_new_stage": 2,
+          "duration": 1.4666666666666668
+        },
+        {
+          "event_id": "val:57:478",
+          "observations_inside_new_stage": 3,
+          "duration": 2.466666666666665
+        },
+        {
+          "event_id": "val:57:552",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7666666666666693
+        },
+        {
+          "event_id": "val:57:605",
+          "observations_inside_new_stage": 11,
+          "duration": 7.966666666666669
+        },
+        {
+          "event_id": "val:78:149",
+          "observations_inside_new_stage": 2,
+          "duration": 1.4666666666666668
+        },
+        {
+          "event_id": "val:78:193",
+          "observations_inside_new_stage": 3,
+          "duration": 2.4333333333333336
+        },
+        {
+          "event_id": "val:78:266",
+          "observations_inside_new_stage": 6,
+          "duration": 4.2333333333333325
+        },
+        {
+          "event_id": "val:78:393",
+          "observations_inside_new_stage": 3,
+          "duration": 2.633333333333333
+        },
+        {
+          "event_id": "val:78:472",
+          "observations_inside_new_stage": 4,
+          "duration": 2.533333333333333
+        },
+        {
+          "event_id": "val:78:548",
+          "observations_inside_new_stage": 3,
+          "duration": 2.133333333333333
+        },
+        {
+          "event_id": "val:78:612",
+          "observations_inside_new_stage": 6,
+          "duration": 5.133333333333336
+        },
+        {
+          "event_id": "val:96:111",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5
+        },
+        {
+          "event_id": "val:96:156",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5333333333333332
+        },
+        {
+          "event_id": "val:96:202",
+          "observations_inside_new_stage": 5,
+          "duration": 3.966666666666666
+        },
+        {
+          "event_id": "val:96:321",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7666666666666675
+        },
+        {
+          "event_id": "val:96:374",
+          "observations_inside_new_stage": 5,
+          "duration": 3.7333333333333325
+        },
+        {
+          "event_id": "val:96:486",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6666666666666679
+        },
+        {
+          "event_id": "val:96:536",
+          "observations_inside_new_stage": 5,
+          "duration": 3.900000000000002
+        },
+        {
+          "event_id": "val:106:107",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7999999999999994
+        },
+        {
+          "event_id": "val:106:161",
+          "observations_inside_new_stage": 4,
+          "duration": 2.9666666666666677
+        },
+        {
+          "event_id": "val:106:250",
+          "observations_inside_new_stage": 6,
+          "duration": 4.433333333333334
+        },
+        {
+          "event_id": "val:106:383",
+          "observations_inside_new_stage": 1,
+          "duration": 1.3333333333333321
+        },
+        {
+          "event_id": "val:106:423",
+          "observations_inside_new_stage": 3,
+          "duration": 2.4333333333333353
+        },
+        {
+          "event_id": "val:106:496",
+          "observations_inside_new_stage": 3,
+          "duration": 1.8999999999999986
+        },
+        {
+          "event_id": "val:106:553",
+          "observations_inside_new_stage": 6,
+          "duration": 4.5
+        },
+        {
+          "event_id": "val:125:105",
+          "observations_inside_new_stage": 3,
+          "duration": 1.5999999999999996
+        },
+        {
+          "event_id": "val:125:153",
+          "observations_inside_new_stage": 2,
+          "duration": 1.9000000000000004
+        },
+        {
+          "event_id": "val:125:210",
+          "observations_inside_new_stage": 11,
+          "duration": 8.433333333333334
+        },
+        {
+          "event_id": "val:125:463",
+          "observations_inside_new_stage": 3,
+          "duration": 1.966666666666665
+        },
+        {
+          "event_id": "val:125:522",
+          "observations_inside_new_stage": 3,
+          "duration": 2.2666666666666693
+        },
+        {
+          "event_id": "val:125:590",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7666666666666657
+        },
+        {
+          "event_id": "val:125:643",
+          "observations_inside_new_stage": 5,
+          "duration": 4.166666666666668
+        },
+        {
+          "event_id": "val:133:127",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5666666666666664
+        },
+        {
+          "event_id": "val:133:174",
+          "observations_inside_new_stage": 3,
+          "duration": 2.166666666666667
+        },
+        {
+          "event_id": "val:133:239",
+          "observations_inside_new_stage": 6,
+          "duration": 4.166666666666666
+        },
+        {
+          "event_id": "val:133:364",
+          "observations_inside_new_stage": 2,
+          "duration": 1.8666666666666671
+        },
+        {
+          "event_id": "val:133:420",
+          "observations_inside_new_stage": 3,
+          "duration": 2.0666666666666664
+        },
+        {
+          "event_id": "val:133:482",
+          "observations_inside_new_stage": 2,
+          "duration": 1.3333333333333321
+        },
+        {
+          "event_id": "val:133:522",
+          "observations_inside_new_stage": 6,
+          "duration": 5.06666666666667
+        },
+        {
+          "event_id": "val:137:107",
+          "observations_inside_new_stage": 1,
+          "duration": 1.2999999999999994
+        },
+        {
+          "event_id": "val:137:146",
+          "observations_inside_new_stage": 3,
+          "duration": 2.2666666666666675
+        },
+        {
+          "event_id": "val:137:214",
+          "observations_inside_new_stage": 5,
+          "duration": 3.3666666666666663
+        },
+        {
+          "event_id": "val:137:315",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5
+        },
+        {
+          "event_id": "val:137:360",
+          "observations_inside_new_stage": 3,
+          "duration": 2.3000000000000007
+        },
+        {
+          "event_id": "val:137:429",
+          "observations_inside_new_stage": 2,
+          "duration": 2.133333333333333
+        },
+        {
+          "event_id": "val:137:493",
+          "observations_inside_new_stage": 7,
+          "duration": 4.966666666666669
+        },
+        {
+          "event_id": "val:139:140",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7999999999999998
+        },
+        {
+          "event_id": "val:139:194",
+          "observations_inside_new_stage": 3,
+          "duration": 1.7666666666666657
+        },
+        {
+          "event_id": "val:139:247",
+          "observations_inside_new_stage": 4,
+          "duration": 3.0
+        },
+        {
+          "event_id": "val:139:337",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6666666666666679
+        },
+        {
+          "event_id": "val:139:387",
+          "observations_inside_new_stage": 3,
+          "duration": 2.7666666666666657
+        },
+        {
+          "event_id": "val:139:470",
+          "observations_inside_new_stage": 3,
+          "duration": 1.866666666666669
+        },
+        {
+          "event_id": "val:139:526",
+          "observations_inside_new_stage": 5,
+          "duration": 4.300000000000001
+        },
+        {
+          "event_id": "val:141:130",
+          "observations_inside_new_stage": 2,
+          "duration": 1.7666666666666666
+        },
+        {
+          "event_id": "val:141:183",
+          "observations_inside_new_stage": 2,
+          "duration": 2.0
+        },
+        {
+          "event_id": "val:141:243",
+          "observations_inside_new_stage": 5,
+          "duration": 3.4333333333333336
+        },
+        {
+          "event_id": "val:141:346",
+          "observations_inside_new_stage": 2,
+          "duration": 1.333333333333334
+        },
+        {
+          "event_id": "val:141:386",
+          "observations_inside_new_stage": 2,
+          "duration": 1.9333333333333336
+        },
+        {
+          "event_id": "val:141:444",
+          "observations_inside_new_stage": 3,
+          "duration": 1.8666666666666671
+        },
+        {
+          "event_id": "val:141:500",
+          "observations_inside_new_stage": 6,
+          "duration": 4.733333333333334
+        },
+        {
+          "event_id": "val:144:101",
+          "observations_inside_new_stage": 3,
+          "duration": 2.4666666666666663
+        },
+        {
+          "event_id": "val:144:175",
+          "observations_inside_new_stage": 4,
+          "duration": 2.333333333333333
+        },
+        {
+          "event_id": "val:144:245",
+          "observations_inside_new_stage": 4,
+          "duration": 3.200000000000001
+        },
+        {
+          "event_id": "val:144:341",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6333333333333329
+        },
+        {
+          "event_id": "val:144:390",
+          "observations_inside_new_stage": 3,
+          "duration": 2.633333333333333
+        },
+        {
+          "event_id": "val:144:469",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6333333333333329
+        },
+        {
+          "event_id": "val:144:518",
+          "observations_inside_new_stage": 7,
+          "duration": 5.06666666666667
+        },
+        {
+          "event_id": "val:145:136",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5666666666666664
+        },
+        {
+          "event_id": "val:145:183",
+          "observations_inside_new_stage": 2,
+          "duration": 1.833333333333334
+        },
+        {
+          "event_id": "val:145:238",
+          "observations_inside_new_stage": 4,
+          "duration": 2.833333333333334
+        },
+        {
+          "event_id": "val:145:323",
+          "observations_inside_new_stage": 2,
+          "duration": 1.5666666666666664
+        },
+        {
+          "event_id": "val:145:370",
+          "observations_inside_new_stage": 3,
+          "duration": 2.5
+        },
+        {
+          "event_id": "val:145:445",
+          "observations_inside_new_stage": 2,
+          "duration": 1.700000000000001
+        },
+        {
+          "event_id": "val:145:496",
+          "observations_inside_new_stage": 6,
+          "duration": 4.0
+        },
+        {
+          "event_id": "val:155:126",
+          "observations_inside_new_stage": 2,
+          "duration": 1.3666666666666663
+        },
+        {
+          "event_id": "val:155:167",
+          "observations_inside_new_stage": 3,
+          "duration": 2.1000000000000005
+        },
+        {
+          "event_id": "val:155:230",
+          "observations_inside_new_stage": 5,
+          "duration": 3.7
+        },
+        {
+          "event_id": "val:155:341",
+          "observations_inside_new_stage": 2,
+          "duration": 1.6999999999999993
+        },
+        {
+          "event_id": "val:155:392",
+          "observations_inside_new_stage": 3,
+          "duration": 1.9666666666666668
+        },
+        {
+          "event_id": "val:155:451",
+          "observations_inside_new_stage": 2,
+          "duration": 1.666666666666666
+        },
+        {
+          "event_id": "val:155:501",
+          "observations_inside_new_stage": 9,
+          "duration": 7.133333333333336
+        },
+        {
+          "event_id": "val:178:141",
+          "observations_inside_new_stage": 3,
+          "duration": 2.166666666666666
+        },
+        {
+          "event_id": "val:178:206",
+          "observations_inside_new_stage": 3,
+          "duration": 2.2
+        },
+        {
+          "event_id": "val:178:272",
+          "observations_inside_new_stage": 4,
+          "duration": 3.5666666666666664
+        },
+        {
+          "event_id": "val:178:379",
+          "observations_inside_new_stage": 3,
+          "duration": 2.1333333333333346
+        },
+        {
+          "event_id": "val:178:443",
+          "observations_inside_new_stage": 3,
+          "duration": 2.4999999999999982
+        },
+        {
+          "event_id": "val:178:518",
+          "observations_inside_new_stage": 4,
+          "duration": 2.366666666666667
+        },
+        {
+          "event_id": "val:178:589",
+          "observations_inside_new_stage": 6,
+          "duration": 5.300000000000001
+        }
+      ]
+    }
+  },
+  "annotation_review_counts": {
+    "unreviewed": 1246
+  },
+  "validation_confusion": {
+    "R0": {
+      "reach the handle of the lid": {
+        "reach the handle of the lid": 2564,
+        "Grasp the handle of the lid": 20
+      },
+      "Grasp the handle of the lid": {
+        "reach the handle of the lid": 185,
+        "Grasp the handle of the lid": 645,
+        "Move away the lid": 153
+      },
+      "Move away the lid": {
+        "Grasp the handle of the lid": 209,
+        "Move away the lid": 1029,
+        "reach the eggplant": 17,
+        "reach the sweet potato": 57
+      },
+      "reach the eggplant": {
+        "reach the eggplant": 971,
+        "Move away the lid": 62,
+        "grasp the eggplant": 10
+      },
+      "grasp the eggplant": {
+        "reach the eggplant": 125,
+        "grasp the eggplant": 303,
+        "Move the eggplant on the box": 25
+      },
+      "Move the eggplant on the box": {
+        "grasp the eggplant": 100,
+        "Move the eggplant on the box": 595,
+        "Release the eggplant to the box": 56
+      },
+      "Release the eggplant to the box": {
+        "Release the eggplant to the box": 379,
+        "Move the eggplant on the box": 81,
+        "Put the lid on the box": 24
+      },
+      "Put the lid on the box": {
+        "Release the eggplant to the box": 76,
+        "Put the lid on the box": 2765,
+        "reach the eggplant": 2,
+        "Release the sweet potato to the box": 109
+      },
+      "reach the sweet potato": {
+        "reach the sweet potato": 1082,
+        "grasp the sweet potato": 31,
+        "Move away the lid": 91
+      },
+      "grasp the sweet potato": {
+        "grasp the sweet potato": 303,
+        "reach the sweet potato": 172,
+        "Move the sweet potato on the box": 26
+      },
+      "Move the sweet potato on the box": {
+        "grasp the sweet potato": 132,
+        "Move the sweet potato on the box": 394,
+        "Release the sweet potato to the box": 175
+      },
+      "Release the sweet potato to the box": {
+        "Release the sweet potato to the box": 507,
+        "Put the lid on the box": 15,
+        "Move the sweet potato on the box": 25
+      }
+    },
+    "R1_1000": {
+      "reach the handle of the lid": {
+        "reach the handle of the lid": 2536,
+        "Grasp the handle of the lid": 48
+      },
+      "Grasp the handle of the lid": {
+        "reach the handle of the lid": 138,
+        "Grasp the handle of the lid": 616,
+        "Move away the lid": 229
+      },
+      "Move away the lid": {
+        "Grasp the handle of the lid": 146,
+        "Move away the lid": 1074,
+        "reach the eggplant": 18,
+        "reach the sweet potato": 74
+      },
+      "reach the eggplant": {
+        "Move away the lid": 53,
+        "reach the eggplant": 964,
+        "grasp the eggplant": 26
+      },
+      "grasp the eggplant": {
+        "reach the eggplant": 109,
+        "grasp the eggplant": 277,
+        "Move the eggplant on the box": 67
+      },
+      "Move the eggplant on the box": {
+        "grasp the eggplant": 87,
+        "Move the eggplant on the box": 634,
+        "Release the eggplant to the box": 30
+      },
+      "Release the eggplant to the box": {
+        "Move the eggplant on the box": 99,
+        "Release the eggplant to the box": 322,
+        "Put the lid on the box": 63
+      },
+      "Put the lid on the box": {
+        "Release the eggplant to the box": 49,
+        "Put the lid on the box": 2811,
+        "reach the eggplant": 2,
+        "Release the sweet potato to the box": 90
+      },
+      "reach the sweet potato": {
+        "reach the sweet potato": 1073,
+        "grasp the sweet potato": 60,
+        "Move away the lid": 71
+      },
+      "grasp the sweet potato": {
+        "grasp the sweet potato": 307,
+        "reach the sweet potato": 153,
+        "Move the sweet potato on the box": 41
+      },
+      "Move the sweet potato on the box": {
+        "grasp the sweet potato": 118,
+        "Move the sweet potato on the box": 464,
+        "Release the sweet potato to the box": 119
+      },
+      "Release the sweet potato to the box": {
+        "Move the sweet potato on the box": 82,
+        "Release the sweet potato to the box": 433,
+        "Put the lid on the box": 32
+      }
+    }
+  }
+}

@@ -137,9 +137,24 @@ def create_torch_dataset(
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
 
-    dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
-    dataset = lerobot_dataset.LeRobotDataset(
+    dataset_kwargs = {}
+    if data_config.local_root is not None:
+        dataset_kwargs["root"] = data_config.local_root
+    dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id, **dataset_kwargs)
+    if data_config.video_backend is not None:
+        dataset_kwargs["video_backend"] = data_config.video_backend
+    if data_config.split_manifest is not None:
+        from openpi.training.stage1_data import load_split
+
+        dataset_kwargs["episodes"] = load_split(data_config.split_manifest, data_config.split, data_config.local_root)
+    dataset_cls = lerobot_dataset.LeRobotDataset
+    if "episodes" in dataset_kwargs:
+        from openpi.training.local_lerobot_dataset import SplitLeRobotDataset
+
+        dataset_cls = SplitLeRobotDataset
+    dataset = dataset_cls(
         data_config.repo_id,
+        **dataset_kwargs,
         delta_timestamps={
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
         },

@@ -20,6 +20,7 @@ import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
+import openpi.policies.piper_policy as piper_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
@@ -65,6 +66,11 @@ class AssetsConfig:
 class DataConfig:
     # LeRobot repo id. If None, fake data will be created.
     repo_id: str | None = None
+    # Optional local LeRobot root and immutable episode split for stage-one experiments.
+    local_root: str | None = None
+    video_backend: str | None = None
+    split_manifest: str | None = None
+    split: Literal["train", "val", "test"] = "train"
     # Directory within the assets directory containing the data assets.
     asset_id: str | None = None
     # Contains precomputed normalization stats. If None, normalization will not be performed.
@@ -275,6 +281,43 @@ class LeRobotAlohaDataConfig(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             action_sequence_keys=self.action_sequence_keys,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotPiperSubtaskDataConfig(DataConfigFactory):
+    """Native Piper data, shared by the official action baseline and subtask stages."""
+
+    local_root: str = "Datasets/eggplant_potato_gripper_binary"
+    split_manifest: str = "assets/pi05_piper_stage1/eggplant_potato/split.json"
+    split: Literal["train", "val", "test"] = "train"
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            local_root=self.local_root,
+            video_backend="pyav",
+            split_manifest=self.split_manifest,
+            split=self.split,
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {name: f"observation.images.{name}" for name in piper_policy.CAMERA_MAP},
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "task",
+                        }
+                    )
+                ]
+            ),
+            data_transforms=_transforms.Group(
+                inputs=[piper_policy.PiperInputs(), _transforms.DeltaActions(piper_policy.JOINT_MASK)],
+                outputs=[_transforms.AbsoluteActions(piper_policy.JOINT_MASK), piper_policy.PiperOutputs()],
+            ),
+            model_transforms=ModelTransformFactory()(model_config),
+            action_sequence_keys=("action",),
         )
 
 
@@ -558,6 +601,19 @@ class TrainConfig:
 
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS = [
+    TrainConfig(
+        name="pi05_piper_stage1",
+        model=pi0_config.Pi0Config(pi05=True, pytorch_compile_mode=None),
+        data=LeRobotPiperSubtaskDataConfig(
+            repo_id="local/eggplant_potato_gripper_binary",
+            assets=AssetsConfig(asset_id="eggplant_potato"),
+        ),
+        pytorch_weight_path="checkpoints/pi05_base_pytorch",
+        batch_size=2,
+        num_workers=2,
+        ema_decay=None,
+        wandb_enabled=False,
+    ),
     #
     # Inference Aloha configs.
     #

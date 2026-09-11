@@ -4,6 +4,19 @@ checkpoints/
 data/
 wandb/
 
+# Local experiment data, run evidence and disposable environment archives.
+/Datasets/
+/logs/
+/.stage1_staging/
+/test_video/
+/episode_0.hdf5
+/gripper_distribution.png
+/site-packages.tar.gz
+/venv_bin.tar.gz
+/docs/.AGENTS.*
+/docs/.pi05_*
+/docs/.parallel_*.pending
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

@@ -1,5 +1,106 @@
 # openpi
 
+## 本项目：M3 Piper 真机推理
+
+当前部署模型是 `checkpoints/pi05_piper_stage1/m3_pilot_seed42/step_003500`，真机为
+`agilex@10.1.122.249`，目录 `~/agentic-openpi`，分支 `upstream-openpi-main`。
+模型服务使用仓库 `.venv`；机械臂客户端使用 conda `aloha`，启动脚本会加载 ROS 和该环境。
+
+### 启动
+
+登录真机，在 `~/agentic-openpi` 下操作。先确认相机和 Piper ROS 驱动已启动：
+需要三路 RGB `/camera_f/color/image_raw`、`/camera_l/color/image_raw`、`/camera_r/color/image_raw`，
+以及 `/puppet/joint_left`、`/puppet/joint_right`。两路 CAN 应为 `ERROR-ACTIVE`（正常工作状态）。
+已有这些节点时直接启动下面的模型服务和客户端，避免重复启动驱动。
+
+终端一，启动模型服务，等待 `M3 ready`：
+
+```bash
+cd ~/agentic-openpi
+bash scripts/serve_m3_piper.sh
+```
+
+默认端口为 `8000`，健康检查为 `curl -fsS http://127.0.0.1:8000/healthz`。
+启动会自动预热模型，不需要先保存观测 NPZ，也不需要指定日志目录。
+若 GPU 正运行其他模型，先正常退出对应服务，为本模型留出显存。
+
+终端二，场景摆好后执行“茄子放入盒子”：
+
+```bash
+cd ~/agentic-openpi
+bash scripts/run_m3_eggplant.sh --execute
+```
+
+这条命令会先复位，再执行最多 900 个动作步，并持续录制视频。
+复位目标为双臂原生零关节位置、夹爪 `0.07 m`，使用至少 6 秒的平滑插值；到位检查通过后开始推理。
+每次模型预测 50 步，默认执行前 15 步，然后重新观测。动作按 30 Hz 下发；模型请求之间存在真实等待时间，整轮耗时包含这些等待。
+
+常用操作：
+
+```bash
+# 只查看相机并录制 5 秒，不请求模型、不发送动作
+bash scripts/run_m3_eggplant.sh --observe-only
+
+# 调用模型查看 subtask，保存视频，但不发送动作
+bash scripts/run_m3_eggplant.sh --max-steps 150
+
+# 只复位；不需要模型服务
+bash scripts/run_m3_eggplant.sh --execute --reset-only
+
+# 明确跳过开场复位
+bash scripts/run_m3_eggplant.sh --execute --no-reset
+
+# 切换到红薯任务
+bash scripts/run_m3_eggplant.sh --execute --prompt "Put the sweet potato into the box"
+```
+
+在客户端终端按 **Ctrl+C** 停止下发后续动作，等待视频和 JSON 保存完成。停止后机械臂保持当前目标位置；
+需要回起始位置时使用上面的 `--execute --reset-only`。正常完成或 Ctrl+C 后均不会自动开始下一轮。
+
+### 每轮输出：一个视频 + 一个 JSON
+
+每次自动新建 `logs/inference/<日期_时间_纳秒>/`，终端会打印完整路径：
+
+```text
+logs/inference/20260907_.../
+  video.mp4
+  run.json
+```
+
+- **`video.mp4`**：三视角拼接，H.264、1440×576、30 fps，按真实时间播放，包含开场复位。
+  录像在独立线程持续采集，模型计算期间也继续录制。画面显示最近一次返回的 subtask、输入时间和结果年龄。
+- **`run.json`**：任务参数、服务模型信息、起止状态、复位结果，以及每次预测的 subtask、状态、分数、
+  延迟、观测状态、50 步原始动作和实际执行步时间；同时保存视频帧时间戳和相机 ROS 时间戳。
+  `queries[].video_input` 给出该次模型输入对应的最近视频帧、时间偏差和每路相机时间戳是否完全一致。
+  最近视频帧用于对照；压缩视频不等同于模型输入的无损图像。
+
+终端只打印复位结果、subtask 变化和每 10 次请求的简要进度；可用 `--log-every 1` 查看每次预测。
+JSON 每 5 秒在后台原子更新，正常结束和 Ctrl+C 时完整收尾。默认不再输出逐帧图片、逐次 NPZ、JSONL、
+单独的状态/复位文件或静帧回放。旧实验的原始文件保留作历史记录。
+
+视频时长由独立的单调时钟控制。若采集错过时间槽，会保留这段实际经过的时间，并在
+`video.repeated_timing_frames` 中计数；不会缩短推理等待或加速回放。`video.max_capture_gap_seconds`
+和 `video.p99_capture_gap_seconds` 用于检查录制是否卡顿。机械臂真实停顿会如实出现在视频中。
+
+### 尚未启动 ROS 时
+
+在每个 ROS 终端先加载环境：
+
+```bash
+bash  # 真机登录 shell 若是 zsh，先进入 bash 再加载 setup.bash
+source /opt/ros/noetic/setup.bash
+source ~/cobot_magic/Piper_ros_private-ros-noetic/devel/setup.bash
+export ROS_MASTER_URI=http://localhost:11311
+export ROS_HOSTNAME=localhost
+```
+
+分别启动 `roscore`、`roslaunch astra_camera multi_camera.launch` 和
+`roslaunch piper start_ms_piper.launch mode:=1 auto_enable:=false`。
+CAN 接口需已按真机配置启用；客户端会在执行前检查链路和传感器新鲜度。
+更详细的部署记录见 [M3 真机部署说明](docs/pi05_m3_robot_deployment.md)。
+
+---
+
 openpi holds open-source models and packages for robotics, published by the [Physical Intelligence team](https://www.physicalintelligence.company/).
 
 Currently, this repo contains three types of models:
@@ -321,3 +422,7 @@ We will collect common issues and their solutions here. If you encounter an issu
 | Import errors when running examples       | Make sure you've installed all dependencies with `uv sync`. Some examples may have additional requirements listed in their READMEs.                    |
 | Action dimensions mismatch                | Verify your data processing transforms match the expected input/output dimensions of your robot. Check the action space definitions in your policy classes.                                  |
 | Diverging training loss                            | Check the `q01`, `q99`, and `std` values in `norm_stats.json` for your dataset. Certain dimensions that are rarely used can end up with very small `q01`, `q99`, or `std` values, leading to huge states and actions after normalization. You can manually adjust the norm stats as a workaround. |
+
+## Training dashboards
+
+Use the [W&B display standard](docs/wandb_display_standard.md) for new experiments. [Current backbone-gradient comparison](https://wandb.ai/xiahy23-tsinghua-university/agentic-openpi-pi05-subtask?nw=2lxpka702pl) uses optimizer-update axes, separate train/validation metrics, and collapsed diagnostics.
