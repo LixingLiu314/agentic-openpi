@@ -2,7 +2,7 @@
 
 日期：2026-09-11。用户选择：只进行N1，明确使用left/right arm版本数据。N0及其他对照不安排。
 
-状态：已确认实验范围并核对数据契约；本文件落地时尚未实现N1模型、执行工程门槛、派发或启动N1。不得把方案确认表述为已经排队或开始训练。当前action_stop_seed42_v2继续原样运行。
+状态更新：用户已进一步授权“N1排上队”。独立实现与CPU预检已完成，正在提交并派发接续程序；实际排队状态必须以日志中的launcher.process.json、phase.json和dispatch_verified.json为准。完整官方模型及八卡工程门槛尚未执行，当前action_stop_seed42_v2继续原样运行。
 
 ## 1. 唯一新实验
 
@@ -73,3 +73,14 @@ READY.json状态为ready_for_training_configuration；数据入口沿用reach_ar
 - 当前旧模型仅作实用参考，记忆/生成路径/词表优化等差异应公开。只做N1，没有匹配N0，不能声称已经因果证明CE→B改善动作。
 - 20个val episode、单seed仅作初步实验；按episode而非相关帧统计不确定性。未做受控真机实验前不宣称选臂/选物成功率提升。
 - 本协议不包含push、模型部署、机器人服务切换或实际机器人动作。
+
+## 6. N1独立实现与门槛状态
+
+- 模型src/openpi/models_pytorch/native_subtask.py，stage native_subtask，schema11，variant official_pi05_native_subtask_n1_v1。全部模型参数来自base；不创建S网络，不创建S优化器。原生lm_head与输入词表保持同一Parameter，由B拥有一次。
+- 普通pi05全局任务/原生14维state prefix保持原样（原模板以Action:结尾）。文字使用单独的causal流，固定cue为`\nSubtask: `，随后GT右移输入；仅目标16位置计算CE，含EOS不含PAD。此模板是本项目N1的明确选择，不声称逐字复现论文未公开的训练模板。文字流共享各层VLM对象并读取原prefix K/V；原prefix和Action永不读取文字流，Action位置不因文字流变长而改变。
+- 部署先计算普通prefix cache；文字逐token使用私有text-only KV cache，不修改供Action使用的prefix cache。不论是否生成文字，给定相同普通观测/权重/噪声，Action不变。输出无跨观察/session记忆。
+- CPU预检logs/pi05_native_n1_20260911/attempt_01/cpu_preflight.json已通过。真实小尺寸PaliGemma/Gemma验证原生联合/增量文字等价、因果与动作隔离、视觉/投影/语言/词表真实CE梯度、双optimizer保存恢复和共享词表；pidfd用真实短生命周期CPU子进程验证退出事件。没有使用GPU进行这些检查。
+- 完整官方权重812个存储tensor的装载核对、真实8卡32×1容量/4→8恢复、实际梯度/原生50×14与新loader，由scripts/run_native_n1.py在当前launcher及最终检查成功结束后自动执行。检查失败则N1退出留证，不启动正式训练，不停止其他实验或guard。正式始终official fresh，不承接工程checkpoint。
+- root logs/pi05_native_n1_20260911/attempt_01；正式输出checkpoints/pi05_piper_native/n1_action_stop_seed42_v1；等待依赖当前attempt_04/formal_launcher.process.json，以PID+创建时间+真实argv验证，而非假设相对/绝对路径字符串一致。pidfd事件等待，无中间step/GPU轮询。
+- 专用W&B视图：https://wandb.ai/xiahy23-tsinghua-university/agentic-openpi-pi05-subtask?nw=2r09j4dx7vn 。已保存并API读回7张主图及折叠诊断/速度/示例；当前未formal启动，不存在N1 loss数据。首10步脚本自动对账云端与本地两loss、B/A梯度、三类media，并用实测速率保存startup_eta.json；验证/存盘/最终门槛暂留2小时估计余量，真实耗时不保证。
+- 当前比较须公开：N1不再使用4层独立S或4×512递归记忆，改为原生B语言层/共享词表、单帧、unroll1；数据流packing也随之变化。这不是只改变一项变量的匹配消融，不据单N1宣称CE→B的因果收益。

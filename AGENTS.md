@@ -1,5 +1,15 @@
 # agentic-openpi server development
 
+## N1实施与接续授权（2026-09-11，实际排队收据为准）
+
+- 用户进一步明确“N1排上队”，现已补齐独立N1入口；仅native N1，不恢复旧队列。当前action_stop_seed42_v2原样继续，不改其指纹源码。接续顺序是当前formal launcher成功退出（包含最终原生检查）→N1八卡工程门槛→official fresh正式5000步→最终原生检查。非零退出、源码变化或门槛失败即停止N1接续并保留证据，不把失败当成可自动绕过的条件。
+- 新代码scripts/{train_native_n1,run_native_n1,check_native_n1,test_native_n1,preflight_native_n1}.py；模型models_pytorch/native_subtask.py，schema11/official_pi05_native_subtask_n1_v1。无独立Subtask网络或S optimizer，VLM预训练语言层和绑定词表原生生成。原pi05观测prefix保持不变，新增的私有causal文字流使用固定cue `\nSubtask: `；文字读prefix，prefix/Action均看不到文字，A位置编号不增加文字长度。共享同一B层实例，并非新建一套层；仅借用既有parallel_layer纯B/A数学函数，不实例化旧S。
+- CPU真实小尺寸PaliGemma/Gemma两层检查通过：原生联合文字前向/逐token cache一致、目标移位/EOS/PAD、未来GT不泄漏、Action对GT不变、文字不修改Action的prefix cache；CE到视觉/投影/语言/词表非零且A零，flow到A非零且B零；绑定参数唯一所有权，保存/双optimizer恢复下一步一致。此证据不能冒充完整官方模型/八卡GPU门槛。完整官方812个存储tensor逐项核对、梯度与原生50×14推理、八卡4→8恢复均由接续器在当前实验结束后实际执行，通过才启动formal。
+- 固定left/right arm数据与178train/20val/no-test/train-only norm；CPU契约与cache入口通过，15类实际目标最长11tokens（含EOS），预算16无截断。N1为单帧无递归，unroll1；采样沿用episode streams但无模型历史输入。B/A各自AdamW、clip norm1；5000/global256/seed42/8卡，容量首测32×1，仅实测CUDA OOM可降16×2或8×4。各阶段检查/权重单独留存，正式不继承工程更新。
+- 预定权威root logs/pi05_native_n1_20260911/attempt_01，输出checkpoints/pi05_piper_native/n1_action_stop_seed42_v1。仅存在文档/代码不等于排队，必须核验root/launcher.process.json、phase.json和dispatch_verified.json的真实PID/创建时间；等待采用pidfd前驱launcher退出事件，不轮询训练step或GPU。旧前驱身份来自logs/pi05_parallel_action_stop_20260911/attempt_04/formal_launcher.process.json，不复用旧失败decision队列。
+- W&B新专用视图https://wandb.ai/xiahy23-tsinghua-university/agentic-openpi-pi05-subtask?nw=2r09j4dx7vn 已通过API读回；等待时没有run或loss数据，不制造空训练记录。formal首10步核验两loss、B/A梯度、三类media，并写startup_verified.json与startup_eta.json。曲线含B/A裁剪前范数和裁剪比例，相对更新仍明确sampled；视觉/投影/语言/词表分项仅工程门槛测量。验证另报native14/all32、前25、关节/夹爪。
+- 保留当前唯一vla-action-stop提醒的9月12日01:30检查，不为排队新增重复提醒。届时先核对前驱终态，再看N1实际phase/失败/首10步ETA；如N1在训，按一次有界读取估计其完成时间并更新同一提醒，不将前驱完成误报为N1完成。没有短周期轮询、push、机器人部署/服务切换或动作授权。
+
 ## 下一组实验已选定：仅N1，使用left/right arm数据（2026-09-11）
 
 - 用户明确选择“只进行N1，数据记得用left/right arm的那套”。后续仅native_parallel_action_stop；不安排N0、query、显式subtask→Action、Action-limited/full或旧队列。完整协议docs/pi05_native_parallel_n1_reach_arm_20260911.md。本次已完成方案/数据锁定，尚未实现N1或派发训练；方案确认不等于已排队，未来按真实执行收据更新状态。
