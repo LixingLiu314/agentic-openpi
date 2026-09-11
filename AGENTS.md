@@ -1,5 +1,10 @@
 # agentic-openpi server development
 
+## N1实际排队状态（2026-09-11 15:13北京时间）
+
+- 最新有效接续器已派发并读回：logs/pi05_native_n1_20260911/attempt_02/dispatch_verified.json，queued=true、phase=waiting_predecessor，PID1256324/created1789110811.06，完整argv见launcher.process.json。GPU可见性覆盖为null（未继承CPU-only空列表），无N1 GPU工作或正式训练；不要误读attempt_01的历史waiting文件，不要重复派发。
+- 运行实现派发SHA3d911c91a1ffad120d766a5476efe9cb8ce871d7，核心N1实现SHA5f3408ab963d7682e95cfb5933aa598a7c6565a6；本次之后仅状态文档提交，不改等待源码指纹。当前前驱仍为attempt_04的formal launcher535442/created1789098587.44，身份与原source_manifest核验通过。正式N1输出n1_action_stop_seed42_v1仍待前驱和八卡门槛成功后自动创建。
+
 ## N1排队恢复说明（2026-09-11，优先于下方attempt_01）
 
 - 首次N1等待进程attempt_01/PID1240872确已派发，但最后环境核验发现从CPU-only派发命令继承了空CUDA_VISIBLE_DEVICES；尚无GPU工作/训练。仅该无子进程的N1 waiter在核验PID、创建时间、argv和waiting_predecessor阶段后被SIGTERM，intentional_waiter_stop.json保留原因；当前action_stop_seed42_v2与其他任务未收信号。这不是模型/训练OOM或门槛失败。
