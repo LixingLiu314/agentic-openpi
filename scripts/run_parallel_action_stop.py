@@ -60,7 +60,7 @@ def pipeline(a):
             phase('gates_complete');return
         raise RuntimeError('All measured batch capacities failed')
     gate=json.loads((root/'engineering_passed.json').read_text());assert gate['passed']
-    output=Path('checkpoints/pi05_piper_parallel/action_stop_seed42_v1')
+    output=a.output
     phase('formal_training',output=str(output),steps=5000)
     checked(train_cmd(output,a.cache,5000,gate['batch'],gate['accumulation'])+['--wandb'],root/'formal.log')
     final=output/'step_005000';phase('final_native_gate',checkpoint=str(final))
@@ -74,6 +74,8 @@ def pipeline(a):
 def main():
     p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True)
     p.add_argument('--cache',type=Path,default=Path('.stage1_staging/piper_rgb224_reach_arm_v1'))
+    p.add_argument('--output',type=Path,default=Path('checkpoints/pi05_piper_parallel/action_stop_seed42_v1'))
+    p.add_argument('--reuse-gates',type=Path)
     p.add_argument('--stage',choices=['gates','formal'],required=True);p.add_argument('--managed',action='store_true')
     a=p.parse_args();a.root.mkdir(parents=True,exist_ok=True)
     signal.signal(signal.SIGTERM,lambda *_:(_ for _ in ()).throw(KeyboardInterrupt()))
@@ -90,9 +92,28 @@ def main():
             files=list(Path('src/openpi').rglob('*.py'))+list(Path('scripts').glob('*parallel*.py'))
             files += [Path('scripts/gpu_reservation.py'),Path('scripts/train_subtask_pytorch.py'),Path('scripts/visualize_subtask_step.py')]
             write(manifest,{str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in files})
+        elif a.reuse_gates:
+            # Only startup-reader / orchestration fixes may reuse integration
+            # evidence. Training, model, data, optimizer and native tests must
+            # remain byte-identical to the already passed eight-rank gates.
+            if (a.root/'source_manifest.json').exists():raise FileExistsError('Recovery root already dispatched')
+            prior=a.reuse_gates
+            old=json.loads((prior/'source_manifest.json').read_text())
+            changed=[p for p,h in old.items() if hashlib.sha256(Path(p).read_bytes()).hexdigest()!=h]
+            allowed={'scripts/verify_parallel_startup.py','scripts/run_parallel_action_stop.py'}
+            if not set(changed)<=allowed:raise ValueError('Computational source changed: '+str(changed))
+            gate=json.loads((prior/'engineering_passed.json').read_text())
+            native=json.loads((prior/'engineering_native.json').read_text())
+            assert json.loads((prior/'gates_exit.json').read_text())['code']==0 and gate['passed'] and native['passed']
+            assert native['action_gradients']['B']==0 and native['action_gradients']['S']==0
+            assert native['ce_gradients']['B']>0 and native['ce_gradients']['A']==0
+            write(a.root/'engineering_passed.json',{**gate,'reused_from':str(prior)})
+            write(a.root/'reused_gate_evidence.json',dict(prior_root=str(prior),changed_noncomputational_sources=changed,
+                native_report_sha256=hashlib.sha256((prior/'engineering_native.json').read_bytes()).hexdigest(),time=time.time()))
+            write(a.root/'source_manifest.json',{p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in old})
         verify(a.root)
         code=run_concurrent(Path('logs/pi05_subtask_stage1/gpu_reservation'),a.root/(a.stage+'_managed.log'),
-            [sys.executable,__file__,'--root',str(a.root),'--cache',str(a.cache),'--stage',a.stage,'--managed'])
+            [sys.executable,__file__,'--root',str(a.root),'--cache',str(a.cache),'--output',str(a.output),'--stage',a.stage,'--managed'])
         write(a.root/(a.stage+'_exit.json'),dict(code=code,time=time.time()))
         raise SystemExit(code)
 if __name__=='__main__':main()

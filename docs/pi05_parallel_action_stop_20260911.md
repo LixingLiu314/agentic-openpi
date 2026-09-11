@@ -1,6 +1,6 @@
 # 首轮修订：Subtask 更新 VLM，Action 仅更新动作专家
 
-日期：2026-09-11。状态：用户已明确授权修改训练代码并启动新实验；新实现已提交，按本文工程门槛验证后派发正式训练。当前实际阶段以 `logs/pi05_parallel_action_stop_20260911/attempt_03/phase.json` 和对应完成/失败记录为准。
+日期：2026-09-11。状态：用户已明确授权修改训练代码并启动新实验；真实八卡及原生/梯度门槛已通过。正式v1在10步时因跨W&B SDK核验器服务变量兼容问题退出，训练本身无OOM/NaN或梯度失败；修复后从官方fresh启动v2。当前实际阶段以 `logs/pi05_parallel_action_stop_20260911/attempt_04/phase.json` 和对应完成/失败记录为准。
 
 服务器权威路径：`docs/pi05_parallel_action_stop_20260911.md`。本修订覆盖 `pi05_parallel_multitask_redesign_20260911.md` 中首轮三组、共用LoRA槽位、两种B梯度配平与三组调度计划；不改写历史实验。
 
@@ -60,7 +60,7 @@ S复用B词表时，词表的S查表/输出打分视图继续detach；CE经B观�
 - AdamW betas0.9/0.95、eps1e-8、weight_decay1e-10；warmup500、peak2.5e-5、decay5000、end2.5e-6；S/B/A先共用schedule。
 - micro32accum1、workers4是首测配置；完整CE→B及unroll4的新图需要实际容量/吞吐确认。不保证旧速度或内存可直接沿用。
 - 暂不加learnable query、共享历史、S→A隐状态、定位/ranking。以后按单独变量讨论。
-- 正式输出 `checkpoints/pi05_piper_parallel/action_stop_seed42_v1`，variant `official_pi05_parallel_multitask_v1`，schema10；工程权重不作为正式训练起点或研究候选。
+- 当前正式输出 `checkpoints/pi05_piper_parallel/action_stop_seed42_v2`，variant `official_pi05_parallel_multitask_v1`，schema10；失败v1保留。工程权重不作为正式训练起点或研究候选。
 
 ## 4. 仍然存在的两项耦合
 
@@ -99,3 +99,11 @@ W&B使用新global-only动作语义/display_set，首10步一次local/cloud核�
 - 首10步的实际本地/云端loss、S/A/B梯度和示例核验保存在正式输出的 `startup_verified.json`。梯度曲线是S/A/B各组裁剪前范数；相对更新是每张量前16个元素的采样统计，不是全参数精确相对范数。视觉/语言独立梯度由工程门槛验证，当前未作为持续训练曲线记录。额外前缀、关节/夹爪、目标干预及记忆消融诊断仍需独立结果，不能把当前普通验证当成这些分析已完成。
 - attempt_03另纳入独立 `visualize_parallel_step.py`，首步图注明确S文字只显示、不条件化A；模型与训练数学不变。`run_config.json`保留原启动Git HEAD与各源文件哈希；恢复保留此启动SHA，当前HEAD单独记入恢复收据，仅文档提交不影响精确恢复，但任何配置/源/runtime/data变化仍拒绝。相应CPU回归与新八卡门槛作为当前版本证据；不修改在训指纹源码。
 - 未部署到Agilex、启动新模型服务或操作机器人。
+
+## 8. 启动核验环境修复与v2恢复
+
+v1在首10步后被核验器异常连带停止，尚无500步正式checkpoint。训练W&B0.19.11的服务变量不能由核验环境W&B0.29.0解析；只清理子进程继承的两项版本相关service变量，保留原认证来源。真实旧SDK live parent→新SDK checker的CPU/network集成已完成，v1 step10的5项本地/云端数值及三类media全部一致；此结果不是训练仍在运行的证据。
+
+attempt_04用runner的受限 `--reuse-gates` 机制复用attempt_03实际通过的8卡工程。只允许核验器和派发器源变化；训练/model/data/optimizer/native检查等其他源必须保持原SHA，复用依据单独存档。v2重新官方初始化，不继承已失败10步，正式预算仍5000。当前只有这一组实验，v1不是第二个有效对照。
+
+旧vla提醒在当前应用不存在，新唯一提醒id为vla-action-stop；北京时间2026-09-12 01:30单次核查，若仍未完成按实际ETA延后同一个提醒。

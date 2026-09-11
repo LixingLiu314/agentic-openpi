@@ -1,6 +1,10 @@
 """Bounded local/cloud startup check; no recurring progress reader."""
-import argparse,json,math,time
+import argparse,json,math,os,time
 from pathlib import Path
+# This read-only checker runs in a different W&B SDK environment. Never attach
+# its API client to the training writer's version-specific service transport.
+os.environ.pop('WANDB_SERVICE',None)
+os.environ.pop('_WANDB_SERVICE',None)
 import wandb
 def main():
     p=argparse.ArgumentParser();p.add_argument("--run",type=Path,required=True);a=p.parse_args()
