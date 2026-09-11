@@ -1,6 +1,6 @@
 # 首轮修订：Subtask 更新 VLM，Action 仅更新动作专家
 
-日期：2026-09-11。状态：用户已明确授权修改训练代码并启动新实验；新实现已提交，按本文工程门槛验证后派发正式训练。当前实际阶段以 `logs/pi05_parallel_action_stop_20260911/attempt_02/phase.json` 和对应完成/失败记录为准。
+日期：2026-09-11。状态：用户已明确授权修改训练代码并启动新实验；新实现已提交，按本文工程门槛验证后派发正式训练。当前实际阶段以 `logs/pi05_parallel_action_stop_20260911/attempt_03/phase.json` 和对应完成/失败记录为准。
 
 服务器权威路径：`docs/pi05_parallel_action_stop_20260911.md`。本修订覆盖 `pi05_parallel_multitask_redesign_20260911.md` 中首轮三组、共用LoRA槽位、两种B梯度配平与三组调度计划；不改写历史实验。
 
@@ -97,5 +97,5 @@ W&B使用新global-only动作语义/display_set，首10步一次local/cloud核�
 - attempt_01因前向比较检查失败退出，未启动正式训练。同权重原生cached动作与新路径逐元素一致，旧joint与cached本身有相同最大0.019366差异。修订checker不扩大native容差：要求native有效prefix/动作精确相等，并用禁用TF32的FP32检查joint等价；不把全masked PAD输出当作S有效特征。模型/训练数学未变，attempt_02使用新源码指纹重验八卡门槛。CPU另已核验loss合并反传等于分别计算后求和。所有失败证据保留。
 - 正式训练从官方B/A和匹配seed42新S重新初始化，5000步；优先最终checkpoint。有限runner在训练完成后执行严格原生加载并写入 `candidate_ready.json` / `complete.json`；只表示可加载实验候选，不表示真机成功。失败写入对应 `gates_failure.json` / `formal_failure.json`，不自动恢复旧队列。
 - 首10步的实际本地/云端loss、S/A/B梯度和示例核验保存在正式输出的 `startup_verified.json`。梯度曲线是S/A/B各组裁剪前范数；相对更新是每张量前16个元素的采样统计，不是全参数精确相对范数。视觉/语言独立梯度由工程门槛验证，当前未作为持续训练曲线记录。额外前缀、关节/夹爪、目标干预及记忆消融诊断仍需独立结果，不能把当前普通验证当成这些分析已完成。
-- `run_config.json`记录启动时Git HEAD与各源文件哈希。精确恢复还要求该配置一致；运行期间不要改变HEAD或指纹源码。当前状态/身份/ETA收据写入忽略的日志目录，阶段文档提交在正式派发前完成。
+- attempt_03另纳入独立 `visualize_parallel_step.py`，首步图注明确S文字只显示、不条件化A；模型与训练数学不变。`run_config.json`保留原启动Git HEAD与各源文件哈希；恢复保留此启动SHA，当前HEAD单独记入恢复收据，仅文档提交不影响精确恢复，但任何配置/源/runtime/data变化仍拒绝。相应CPU回归与新八卡门槛作为当前版本证据；不修改在训指纹源码。
 - 未部署到Agilex、启动新模型服务或操作机器人。

@@ -18,6 +18,13 @@ class Layer(nn.Module):
         self.self_attn.num_key_value_groups=1
         for k in ['q_proj','k_proj','v_proj','o_proj']:setattr(self.self_attn,k,nn.Linear(16,16))
 def main():
+    from train_parallel_action_stop import verify_resume_config
+    original=dict(training_git_commit='1'*40,sources={'model.py':'stable'},world_size=8)
+    assert verify_resume_config({**original,'training_git_commit':'2'*40},original)==original
+    for changed in [{'sources':{'model.py':'changed'}},{'world_size':4}]:
+        try:verify_resume_config({**original,**changed},original)
+        except ValueError:pass
+        else:raise AssertionError('Changed experiment accepted for exact resume')
     torch.manual_seed(42)
     b=nn.Module();b.layers=nn.ModuleList([Layer(),Layer()])
     a=nn.Module();a.layers=nn.ModuleList([Layer(),Layer()])

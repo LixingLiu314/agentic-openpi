@@ -46,6 +46,21 @@ def write_json(path, value):
     temporary.replace(path)
 
 
+def verify_resume_config(current, saved):
+    """Keep the original launch commit; source/runtime/data hashes stay strict.
+
+    Documentation-only commits must not invalidate an otherwise exact resume.
+    The current checkout HEAD is recorded separately in the resume receipt.
+    """
+    original = saved["training_git_commit"]
+    if len(original) != 40 or any(c not in "0123456789abcdef" for c in original):
+        raise ValueError("Invalid saved training commit")
+    candidate = {**current, "training_git_commit": original}
+    if candidate != saved:
+        raise ValueError("Exact resume rejected changed config/source/runtime/data")
+    return candidate
+
+
 class Optimizers:
     def __init__(self, model, world):
         self.observed = {"action": model.action_parameters(), "backbone": model.backbone_parameters()}
@@ -183,7 +198,7 @@ def train(args):
         gradient_observability="independent S/B/A pre-clip norms; relative updates sampled first16 elements per tensor")
     config["optimizer"]["clipping_groups"]=["S","B","A"]
     new_sources = ["scripts/train_parallel_action_stop.py","scripts/check_parallel_action_stop.py",
-        "scripts/run_parallel_action_stop.py","scripts/verify_parallel_startup.py",
+        "scripts/run_parallel_action_stop.py","scripts/verify_parallel_startup.py","scripts/visualize_parallel_step.py",
         "src/openpi/models_pytorch/parallel_subtask.py","src/openpi/training/parallel_evaluation.py",
         "src/openpi/training/parallel_wandb.py","src/openpi/policies/parallel_subtask_policy.py",
         "src/openpi/models_pytorch/recurrent_subtask.py","src/openpi/training/recurrent_sequence.py",
@@ -195,8 +210,7 @@ def train(args):
     if args.resume:
         resume_path = args.output / json.loads((args.output / "latest.json").read_text())["checkpoint"]
         saved = json.loads((resume_path / "metadata.json").read_text())
-        if saved["config"] != config:
-            raise ValueError("Exact resume rejected changed config/source/runtime/data")
+        config = verify_resume_config(config, saved["config"])
         start, best, counters = saved["completed_steps"], saved["best"], saved["counters"]
     elif rank == 0:
         args.output.mkdir(parents=True, exist_ok=False)
@@ -273,7 +287,9 @@ def train(args):
         else:
             gathered = [restored]
         if rank == 0:
-            write_json(args.output / f"resume_state_{start:06d}.json", {"passed":True,"ranks":gathered})
+            write_json(args.output / f"resume_state_{start:06d}.json", {"passed":True,"ranks":gathered,
+                "training_git_commit":config["training_git_commit"],
+                "resume_git_head":subprocess.check_output(["/media/raid/workspace/surongpeng/anaconda3/bin/git","rev-parse","HEAD"],text=True).strip()})
         del saved_state
     sampler = EpisodeStreamSampler(episode_rows(raw.hf_dataset), batch_size=args.batch_size,
                                     unroll=args.unroll, steps=args.steps * args.accumulation, start=start * args.accumulation, seed=args.seed, rank=rank)
@@ -399,7 +415,7 @@ def train(args):
              "data_wait_seconds_max":float(wait_tensor),
              "seconds":time.perf_counter() - begun})
         if completed == 1 and rank == 0 and not args.engineering_smoke:
-            from visualize_subtask_step import render_first_step
+            from visualize_parallel_step import render_first_step
             render_first_step(plain, first_batch, dc, args.output / "first_update", step=1,
                                origin="first actual sequence minibatch; reset-memory policy after first optimizer update", limit=1)
             if wb is not None:

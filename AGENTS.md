@@ -13,10 +13,10 @@
 - 用户已明确要求“现在修改训练代码启动新实验”，随后要求先commit并记录提交习惯。历史修改和Git规范已提交为08cb901；并行实现已提交为d855371。以下“本轮只设计/未授权实施”均为较早历史状态，当前只授权这一个新单组，不恢复旧串联队列，也不增开limited/full或其他消融。
 - 独立入口scripts/train_parallel_action_stop.py、run_parallel_action_stop.py、check_parallel_action_stop.py及models_pytorch/parallel_subtask.py。schema10 / official_pi05_parallel_multitask_v1，CE→S+B、flow→A；每层A读取的B K/V detach，无S文字回填，S记忆仅在S中。B全量CE更新，不是Frozen。正式fresh official B/A、匹配seed42新S、5000/global256/8卡micro32accum1/unroll4/workers4，现有reach-arm178/20/train-only norm不改。
 - attempt_01真实八卡4→8恢复完成，S/A/B均8次更新；原检查错误地用过严逐元素阈值对比另一种BF16联合attention形状，并包含无效PAD位置，随后退出，未启动正式训练。只读同权重诊断表明新路径与原生cached动作逐元素相等；旧joint与cached本身也有相同0.019366最大差。保留attempt_01证据，不把该检查失败称为OOM或模型训练崩溃。模型/训练数学不变；修订checker严格检验native有效prefix/动作逐元素一致，另外关闭TF32做FP32 joint控制，真实分loss反传。
-- 新权威运行目录logs/pi05_parallel_action_stop_20260911/attempt_02；读取当前phase.json、gates_exit.json、engineering_passed.json、engineering_native.json、formal_launcher.process.json、formal.process.json、formal_failure.json及complete.json判定实际状态。采用新指纹和八卡工程重验；本条是派发前记录，不是实际正式启动或完成证据。旧attempt_01不得再派发formal或按其旧phase猜测运行中。
+- 新权威运行目录logs/pi05_parallel_action_stop_20260911/attempt_03；读取当前phase.json、gates_exit.json、engineering_passed.json、engineering_native.json、formal_launcher.process.json、formal.process.json、formal_failure.json及complete.json判定实际状态。采用新指纹和八卡工程重验；本条是派发前记录，不是实际正式启动或完成证据。attempt_01/02均保留工程证据，不得再派发formal或按旧phase猜测运行中。attempt_03还纳入独立parallel首步示例图，明确S文字不条件化A，避免复用旧图注；训练/模型数学未变。
 - 正式输出checkpoints/pi05_piper_parallel/action_stop_seed42_v1。first10由trainer核验W&B/local loss、S/A/B梯度与输入/输出图及类别表，证据startup_verified.json。规范视图https://wandb.ai/xiahy23-tsinghua-university/agentic-openpi-pi05-subtask?nw=i0indjgwejl 。之后仅一次有界读取估ETA，更新既有vla为ETA单次跟进；不短周期轮询，不查GPU占用。所有GPU工作run_concurrent，保护其他任务与guard。
 - 当前梯度曲线是S/A/B各组裁剪前范数，独立norm1裁剪；相对更新只抽每张量前16元素，名字明确sampled。视觉/语言非零梯度由工程门槛单独验证，未持续记录分项曲线。普通causal/actor/CE/native14/all32验证已有；额外前缀/关节夹爪/目标干预/记忆消融须以独立报告为准，不宣称这些诊断已完成。
-- 本训练器把启动HEAD纳入run_config精确恢复对比。此轮源与阶段文档提交在派发前完成；训练需恢复期间不改变HEAD或指纹源码，动态身份/ETA保存在忽略的运行日志。后续如改进此限制，应独立新版本验证，不改在训合同。没有push、部署Agilex、服务切换或机器人动作授权。
+- run_config永久保留原启动training_git_commit；精确恢复对配置/源码/runtime/data/world仍严格比较，只允许当前HEAD因文档等非计算内容提交而改变，并在resume_state单独记录resume_git_head。不能仅因HEAD相同而省略内容哈希，也不能借文档提交放行训练源变化。此兼容行为已加入CPU拒绝配置/源变更测试，当前八卡门槛仍需实际通过；不改指纹源码，动态身份/ETA先保存日志。没有push、部署Agilex、服务切换或机器人动作授权。
 
 ## 首轮方案收敛记录：仅Subtask回传VLM，Action-stop（2026-09-11，实施状态以上节为准）
 
