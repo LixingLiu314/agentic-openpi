@@ -10,6 +10,8 @@
 
 ## 当前实施授权：并行Action-stop单组（2026-09-11）
 
+- v2正式启动已核验：2026-09-11 11:49派发，11:53首10步W&B/local两loss、S/B/A梯度及三类media对账通过；11:54:56最后一次有界读取17/5000，8个真实rank存活，source_manifest全部不变。训练锁定commit64bc1d9bb2ee72c09b82d009a6983fbd3f2f0db8；后续本状态文档commit不改训练SHA。权威收据attempt_04/startup_handoff.json及正式输出startup_verified.json。v2首步两张实际图已检查，正确标明S文字仅展示。
+- v2实测steps3–17平均8.19115秒/update，最后读取时剩余纯训练约11.34小时，加45分钟验证/存盘/最终原生门槛的点估计为9月12日00:00左右；考虑共享负载波动，用户预期约午夜至01:00，单次检查保留01:30缓冲。启动核验已结束，不再主动读取中间steps/checkpoints，除非用户新问进度或到该ETA跟进。不要把早期CE或动作误差当成最终效果。
 - 当前恢复身份：logs/pi05_parallel_action_stop_20260911/attempt_04，正式输出checkpoints/pi05_piper_parallel/action_stop_seed42_v2。attempt_03的真实八卡工程及所有原生/梯度门槛已通过；首次formal v1训练10步后，被startup checker继承训练W&B0.19.11的WANDB_SERVICE而使新0.29.0解析失败所中止。不是OOM、NaN或梯度错误；未到500步，无可恢复正式checkpoint，v2必须official fresh重新开始，保留失败v1及全部证据。
 - 核验器已清除父进程版本相关的WANDB_SERVICE/_WANDB_SERVICE，不清除凭据；用真实旧SDK live offline parent→新SDK checker完成CPU/network集成，失败v1的step10 loss/梯度/media已真实对账成功，但此晚到验证不表示v1仍在训练。新runner只允许startup-reader和orchestrator两文件改变时复用旧八卡证据，其余训练/模型/data/optimizer/native门槛源必须逐字节相同，并写reused_gate_evidence；这是明确受限复用，不宣称重跑了新一套八卡工程。
 - 当前应用不存在旧vla自动化，已创建唯一新heartbeat vla-action-stop：北京时间2026-09-12 01:30单次检查。派发后以本次实际首10步/有界读取重估；后续更新这个新id，不再使用vla，也不要新增重复提醒。若届时未完成，按剩余时间延后同一提醒；完成/失败报告后暂停。
