@@ -1,5 +1,12 @@
 # agentic-openpi server development
 
+## 下一组实验已选定：仅N1，使用left/right arm数据（2026-09-11）
+
+- 用户明确选择“只进行N1，数据记得用left/right arm的那套”。后续仅native_parallel_action_stop；不安排N0、query、显式subtask→Action、Action-limited/full或旧队列。完整协议docs/pi05_native_parallel_n1_reach_arm_20260911.md。本次已完成方案/数据锁定，尚未实现N1或派发训练；方案确认不等于已排队，未来按真实执行收据更新状态。
+- N1由VLM原生语言层/词表输出自回归预测subtask，无独立Subtask Transformer decoder；CE→B、flow→A，Action训练/推理均不读GT或生成subtask。首轮单帧无递归记忆；与当前在训实验比较时必须公开记忆与生成路径差异，单N1不能证明语义训练改善动作的因果收益。
+- 数据固定Datasets/eggplant_potato_reach_arm_v1、repo ID local/eggplant_potato_reach_arm_v1、assets/pi05_piper_reach_arm_v1/eggplant_potato和.stage1_staging/piper_rgb224_reach_arm_v1。沿用178train/20val/no-test及train-only norm；只三个reach阶段带with the left/right arm，其他阶段不改。本次split/norm/annotations实际SHA256均匹配reach_arm_data契约；不得误用旧无左右臂数据或其他split/norm。
+- 官方fresh B/A、seed42、5000/global256/8卡、原LR schedule、B/A独立AdamW及norm1裁剪；须先补齐原生语言接口并通过因果/梯度/原生前向/8卡恢复门槛，提交独立实现后再派发。当前action_stop_seed42_v2继续原样运行，源码指纹不动；当前提醒不因本次方案落地自动修改。此节是最新N1选择，优先于下方历史“其他实验暂缓”的泛指；未发生的实现、工程检查、排队或训练不得声称完成。
+
 ## 后续架构硬约束：Subtask 使用 VLM 原生语言生成（2026-09-11）
 
 - 用户明确要求“之后所有都不要出现transformer decoder了”，结合前文指后续方案、代码和新实验不得再新增或沿用独立的 Subtask Transformer decoder（包括当前随机初始化的4层512维S），不能仅更名为其他模块后继续承担同一套独立自回归解码。Subtask 应由 VLM backbone 自身的预训练语言层和原生词表输出路径生成；必要的词表线性投影不等于新增 Transformer decoder。
