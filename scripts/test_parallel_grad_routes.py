@@ -35,11 +35,22 @@ def main():
     p,s=forward();p.square().mean().backward()
     assert all(v.grad is None or torch.count_nonzero(v.grad)==0 for v in a.parameters())
     assert any(v.grad is not None and torch.count_nonzero(v.grad)>0 for v in b.parameters())
+    b.zero_grad(set_to_none=True);a.zero_grad(set_to_none=True)
+    p,s=forward();params=list(b.parameters())+list(a.parameters())
+    lp,la=p.square().mean(),s.square().mean()
+    gp=torch.autograd.grad(lp,params,allow_unused=True,retain_graph=True)
+    ga=torch.autograd.grad(la,params,allow_unused=True,retain_graph=True)
+    combined=torch.autograd.grad(lp+la,params,allow_unused=True)
+    for param,left,right,total in zip(params,gp,ga,combined):
+        left=torch.zeros_like(param) if left is None else left
+        right=torch.zeros_like(param) if right is None else right
+        total=torch.zeros_like(param) if total is None else total
+        torch.testing.assert_close(total,left+right,rtol=1e-5,atol=1e-6)
     d=ParallelDecoder(SubtaskDecoderConfig(memory_dim=16,embedding_dim=16,width=16,heads=2,layers=1,mlp_dim=32),recurrent=True)
     h=torch.randn(4,3,16,requires_grad=True);m=torch.ones(4,3,dtype=torch.bool)
     projected,_,carry=d.compose_sequence(h,m,resets=torch.tensor([True,False,False,False]),unroll=4)
     projected[-1].square().mean().backward()
     assert h.grad[0].abs().sum()>0 and h.grad[-1].abs().sum()>0
     assert d.memory_update.weight_hh.grad.abs().sum()>0
-    print('PASS: 2-layer action->B blocked; B->A blocked; recurrent CE reaches current and past B features')
+    print('PASS: 2-layer action->B blocked; CE->A blocked; merged loss gradients equal separate routes; recurrent CE reaches current and past B features')
 if __name__=='__main__':main()

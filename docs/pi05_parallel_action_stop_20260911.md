@@ -1,12 +1,12 @@
 # 首轮修订：Subtask 更新 VLM，Action 仅更新动作专家
 
-日期：2026-09-11。状态：用户已选择首轮方向；本轮更新实验设计，尚未实施或启动训练。
+日期：2026-09-11。状态：用户已明确授权修改训练代码并启动新实验；新实现已提交，按本文工程门槛验证后派发正式训练。当前实际阶段以 `logs/pi05_parallel_action_stop_20260911/attempt_02/phase.json` 和对应完成/失败记录为准。
 
 服务器权威路径：`docs/pi05_parallel_action_stop_20260911.md`。本修订覆盖 `pi05_parallel_multitask_redesign_20260911.md` 中首轮三组、共用LoRA槽位、两种B梯度配平与三组调度计划；不改写历史实验。
 
 ## 1. 唯一首轮实验
 
-只做 `parallel_action_stop` 的设计。Subtask CE 更新共享VLM B与S；action loss只更新A，不回传B。Action-limited/full延后，不自动列入接续队列。
+首轮只实施和训练 `parallel_action_stop`。Subtask CE 更新共享VLM B与S；action loss只更新A，不回传B。Action-limited/full延后，不自动列入接续队列。
 
 此前测得的S/A各自参数梯度差异不等于两种loss在共享B上的梯度差异。本次决定是先消除B上的多loss竞争，建立简洁基线，不宣称已实测共享B梯度相差悬殊。
 
@@ -60,7 +60,7 @@ S复用B词表时，词表的S查表/输出打分视图继续detach；CE经B观�
 - AdamW betas0.9/0.95、eps1e-8、weight_decay1e-10；warmup500、peak2.5e-5、decay5000、end2.5e-6；S/B/A先共用schedule。
 - micro32accum1、workers4是首测配置；完整CE→B及unroll4的新图需要实际容量/吞吐确认。不保证旧速度或内存可直接沿用。
 - 暂不加learnable query、共享历史、S→A隐状态、定位/ranking。以后按单独变量讨论。
-- 拟输出 `checkpoints/pi05_piper_parallel/action_stop_seed42_v1`，variant `official_pi05_parallel_multitask_v1`，实现时分配新schema；当前这些是计划身份，不是已有候选。
+- 正式输出 `checkpoints/pi05_piper_parallel/action_stop_seed42_v1`，variant `official_pi05_parallel_multitask_v1`，schema10；工程权重不作为正式训练起点或研究候选。
 
 ## 4. 仍然存在的两项耦合
 
@@ -87,8 +87,15 @@ GPU门槛和训练仍通过reservation run_concurrent；不查询GPU占用，不
 
 单组不能证明CE→B改善动作，也不能比较action回传范围。日后若需因果证据，先考虑匹配的S→B detach对照；此处不自动增加新正式实验。旧串联模型作为实用历史参照，公开其文字/历史通路差异。
 
-W&B使用新global-only动作语义/display_set，首10步一次local/cloud核验，之后按真实耗时给ETA并沿用单次跟进。当前不创建run/view、调度器或提醒；旧失败decision接续器不自动恢复。
+W&B使用新global-only动作语义/display_set，首10步一次local/cloud核验，之后按真实耗时给ETA并沿用单次跟进。规范视图已创建并回读验证：<https://wandb.ai/xiahy23-tsinghua-university/agentic-openpi-pi05-subtask?nw=i0indjgwejl>。旧失败decision接续器不自动恢复。
 
 ## 7. 本轮状态
 
-仅将首轮方案收敛为Action-stop并更新服务器AGENTS.md；未改训练源码、执行梯度测试、启动训练、部署或控制机器人。原三组设计以历史文件保留，本文件是新的首轮规范。
+- 用户先后授权实现/启动、并要求提交先前修改和固化提交习惯。历史快照与Git规范为 `08cb9014025cc6a52cf2776df3d5c25425c0829f`；并行Action-stop实现为 `d85537170c1dc04c4b43666f6813b4564edd058c`。原三组设计作为历史方案保留，首轮以本文件为准。
+- 新模型/训练/原生加载/评估/W&B及有限派发入口使用独立 `*parallel*` 文件；未改历史模型/训练源、数据、标签或归档运行指纹。训练共享一次普通观测prefix，A在每层仅以detached B K/V读取观测；S使用保留梯度的末层特征及自身递归状态。
+- CPU真实attention算子的小模型梯度路由与跨观测记忆反传已通过；真实八卡micro32×accum1×8已从4步检查点恢复至8步，S/A/B各8次更新。工程原生加载与实际大模型梯度检查结果见运行目录，不能把工程8步当成正式训练或性能证明。
+- attempt_01因前向比较检查失败退出，未启动正式训练。同权重原生cached动作与新路径逐元素一致，旧joint与cached本身有相同最大0.019366差异。修订checker不扩大native容差：要求native有效prefix/动作精确相等，并用禁用TF32的FP32检查joint等价；不把全masked PAD输出当作S有效特征。模型/训练数学未变，attempt_02使用新源码指纹重验八卡门槛。CPU另已核验loss合并反传等于分别计算后求和。所有失败证据保留。
+- 正式训练从官方B/A和匹配seed42新S重新初始化，5000步；优先最终checkpoint。有限runner在训练完成后执行严格原生加载并写入 `candidate_ready.json` / `complete.json`；只表示可加载实验候选，不表示真机成功。失败写入对应 `gates_failure.json` / `formal_failure.json`，不自动恢复旧队列。
+- 首10步的实际本地/云端loss、S/A/B梯度和示例核验保存在正式输出的 `startup_verified.json`。梯度曲线是S/A/B各组裁剪前范数；相对更新是每张量前16个元素的采样统计，不是全参数精确相对范数。视觉/语言独立梯度由工程门槛验证，当前未作为持续训练曲线记录。额外前缀、关节/夹爪、目标干预及记忆消融诊断仍需独立结果，不能把当前普通验证当成这些分析已完成。
+- `run_config.json`记录启动时Git HEAD与各源文件哈希。精确恢复还要求该配置一致；运行期间不要改变HEAD或指纹源码。当前状态/身份/ETA收据写入忽略的日志目录，阶段文档提交在正式派发前完成。
+- 未部署到Agilex、启动新模型服务或操作机器人。

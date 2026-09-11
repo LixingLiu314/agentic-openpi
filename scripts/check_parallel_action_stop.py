@@ -51,16 +51,22 @@ def main():
         with torch.no_grad():
             h,m,v=model.joint_outputs(batch.observation,batch.global_prompts,batch.actions,noise=fixed,time=times)
             rh,rm,rv=model.joint_outputs(batch.observation,batch.global_prompts,batch.actions,noise=fixed,time=times,detached=False)
-            torch.testing.assert_close(v,rv,rtol=.01,atol=.002)
-            torch.testing.assert_close(h,rh,rtol=.01,atol=.03)
             context=model.prepare_context(batch.observation,batch.global_prompts)
             pref=model.action_prefix(context,["wrong"]*4)
             alt=model.action_prefix(context,[""]*4)
             torch.testing.assert_close(pref.mask,alt.mask,rtol=0,atol=0)
             noisy=times[:,None,None]*fixed+(1-times[:,None,None])*batch.actions
             cached=model.base.denoise_step(context.state,pref.mask,pref.cache,noisy,times)
-            torch.testing.assert_close(v,cached,rtol=.015,atol=.003)
+            # Native cached deployment is the forward contract. A joint attention
+            # GEMM uses different BF16 shapes; all-masked PAD queries additionally
+            # have a different softmax domain. Neither is a semantic target for S.
+            torch.testing.assert_close(v,cached,rtol=0,atol=0)
+            torch.testing.assert_close(h[m.bool()],context.memory[m.bool()],rtol=0,atol=0)
             action_max_diff=float((v-cached).abs().max())
+            joint_diagnostic={"action_max_abs":float((v-rv).abs().max()),
+                "action_rmse":float((v-rv).float().square().mean().sqrt()),
+                "valid_prefix_max_abs":float((h[m.bool()]-rh[m.bool()]).abs().max()),
+                "native_prefix_max_abs":float((h[m.bool()]-context.memory[m.bool()]).abs().max())}
         del h,m,v,rh,rm,rv,cached,context,pref,alt
         model.train();model.zero_grad(set_to_none=True)
         model(batch,noise=fixed,time=times)["loss_subtask"].backward()
@@ -75,7 +81,20 @@ def main():
         act={"S":grad_norm(model.subtask_parameters()),"B":grad_norm(model.backbone_parameters()),"A":grad_norm(model.action_parameters())}
         assert act["S"]==0 and act["B"]==0 and act["A"]>0,act
         model.zero_grad(set_to_none=True)
-        result.update(ce_gradients=ce,action_gradients=act,joint_native_max_abs_diff=action_max_diff)
+        # Disable TF32 for a real FP32 joint-equivalence control. BF16 deployment
+        # and training must match exactly above, not merely a widened tolerance.
+        torch.backends.cuda.matmul.allow_tf32=False
+        torch.backends.cudnn.allow_tf32=False
+        torch.set_float32_matmul_precision('highest')
+        model.float().eval()
+        with torch.no_grad():
+            h,m,v=model.joint_outputs(batch.observation,batch.global_prompts,batch.actions,noise=fixed,time=times)
+            rh,rm,rv=model.joint_outputs(batch.observation,batch.global_prompts,batch.actions,noise=fixed,time=times,detached=False)
+            torch.testing.assert_close(v,rv,rtol=1e-4,atol=2e-5)
+            torch.testing.assert_close(h[m.bool()],rh[m.bool()],rtol=1e-4,atol=2e-4)
+            fp32_joint_max=float((v-rv).abs().max())
+        result.update(ce_gradients=ce,action_gradients=act,native_action_max_abs_diff=action_max_diff,
+                      joint_bf16_diagnostic=joint_diagnostic,fp32_joint_action_max_abs_diff=fp32_joint_max)
     a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(json.dumps(result,indent=2)+"\n")
     print(json.dumps(result),flush=True)
 if __name__=="__main__":main()

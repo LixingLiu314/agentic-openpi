@@ -8,13 +8,23 @@
 - 新实验派发前优先提交实现与验证代码，并将commit SHA连同源码哈希纳入运行provenance；运行身份/状态文档可在启动确认后另做小提交。不得为了提交而修改运行中的指纹源码。
 - 本授权包括本地git commit，不默认授权push、发布PR、改写历史、amend或强制推送。继续使用仓库已有git身份，非交互SSH使用/media/raid/workspace/surongpeng/anaconda3/bin/git。
 
-## 最新首轮收敛：仅Subtask回传VLM，Action-stop（2026-09-11）
+## 当前实施授权：并行Action-stop单组（2026-09-11）
+
+- 用户已明确要求“现在修改训练代码启动新实验”，随后要求先commit并记录提交习惯。历史修改和Git规范已提交为08cb901；并行实现已提交为d855371。以下“本轮只设计/未授权实施”均为较早历史状态，当前只授权这一个新单组，不恢复旧串联队列，也不增开limited/full或其他消融。
+- 独立入口scripts/train_parallel_action_stop.py、run_parallel_action_stop.py、check_parallel_action_stop.py及models_pytorch/parallel_subtask.py。schema10 / official_pi05_parallel_multitask_v1，CE→S+B、flow→A；每层A读取的B K/V detach，无S文字回填，S记忆仅在S中。B全量CE更新，不是Frozen。正式fresh official B/A、匹配seed42新S、5000/global256/8卡micro32accum1/unroll4/workers4，现有reach-arm178/20/train-only norm不改。
+- attempt_01真实八卡4→8恢复完成，S/A/B均8次更新；原检查错误地用过严逐元素阈值对比另一种BF16联合attention形状，并包含无效PAD位置，随后退出，未启动正式训练。只读同权重诊断表明新路径与原生cached动作逐元素相等；旧joint与cached本身也有相同0.019366最大差。保留attempt_01证据，不把该检查失败称为OOM或模型训练崩溃。模型/训练数学不变；修订checker严格检验native有效prefix/动作逐元素一致，另外关闭TF32做FP32 joint控制，真实分loss反传。
+- 新权威运行目录logs/pi05_parallel_action_stop_20260911/attempt_02；读取当前phase.json、gates_exit.json、engineering_passed.json、engineering_native.json、formal_launcher.process.json、formal.process.json、formal_failure.json及complete.json判定实际状态。采用新指纹和八卡工程重验；本条是派发前记录，不是实际正式启动或完成证据。旧attempt_01不得再派发formal或按其旧phase猜测运行中。
+- 正式输出checkpoints/pi05_piper_parallel/action_stop_seed42_v1。first10由trainer核验W&B/local loss、S/A/B梯度与输入/输出图及类别表，证据startup_verified.json。规范视图https://wandb.ai/xiahy23-tsinghua-university/agentic-openpi-pi05-subtask?nw=i0indjgwejl 。之后仅一次有界读取估ETA，更新既有vla为ETA单次跟进；不短周期轮询，不查GPU占用。所有GPU工作run_concurrent，保护其他任务与guard。
+- 当前梯度曲线是S/A/B各组裁剪前范数，独立norm1裁剪；相对更新只抽每张量前16元素，名字明确sampled。视觉/语言非零梯度由工程门槛单独验证，未持续记录分项曲线。普通causal/actor/CE/native14/all32验证已有；额外前缀/关节夹爪/目标干预/记忆消融须以独立报告为准，不宣称这些诊断已完成。
+- 本训练器把启动HEAD纳入run_config精确恢复对比。此轮源与阶段文档提交在派发前完成；训练需恢复期间不改变HEAD或指纹源码，动态身份/ETA保存在忽略的运行日志。后续如改进此限制，应独立新版本验证，不改在训合同。没有push、部署Agilex、服务切换或机器人动作授权。
+
+## 首轮方案收敛记录：仅Subtask回传VLM，Action-stop（2026-09-11，实施状态以上节为准）
 
 - 用户进一步选择先让action梯度不回传VLM，只有subtask回传。首轮只设计parallel_action_stop：CE→S+B（完整参与观测计算的视觉/投影/语言），flow→A；并行分支、无生成文字回填。权威修订docs/pi05_parallel_action_stop_20260911.md覆盖下方三组/梯度配平安排。原Action-limited/full延后，不自动派发。
 - 仅A读取B特征/每层prefix K/V的通路detach；S到B梯度保持，B绝非Frozen。必须测试所有action→B路径为零，CE→B视觉等真实非零。单组不额外安装原三组预留LoRA；B采用官方基座CE全量更新，未来恢复多组要重新做匹配参数化。
 - 首轮普通CE和普通50×32 flow均系数1，无共享B多loss竞争，取消上一稿的0.3共享梯度校准/配平。S/B/A唯一参数所有权、各自AdamW、独立norm1裁剪。此前测量是S/A各自参数范数，不是两种loss在共享B上的范数，不能说后者悬殊已被实测证实。
 - 保留official fresh、seed42、reach-arm178/20/train-only norm、5000/global256/8卡、原LR schedule，真实容量确认后定micro/accum。S保留4层512/8heads/16token及4×512递归/unroll4；S记忆不会即时传给A。仍不加query/grounding/ranking/前缀加权或共享历史。
-- 当前本轮只修订设计和指导文件，未改模型/训练源码、测试GPU、启动训练、调整提醒、部署或操作机器人。旧队列不自动恢复；后续训练按工程门槛、run_concurrent及ETA规范执行。
+- 此节最初只修订设计和指导文件；后续实施已由上节用户明确授权覆盖。旧队列不自动恢复；训练按工程门槛、run_concurrent及ETA规范执行。
 
 ## 最新用户纠正：共享VLM并行双分支重设计（2026-09-11）
 
