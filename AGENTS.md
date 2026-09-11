@@ -1,5 +1,13 @@
 # agentic-openpi server development
 
+## N1之后的输入query实验：本轮规划，未派发（2026-09-11）
+
+- 用户希望“之后再排一个query token的实验”，明确query是直接输入VLM的token，但具体机制尚未想清楚，要求先帮助规划。候选协议docs/pi05_native_query_q1_plan_20260911.md；本轮只新增设计文档和本指导，未实现/派发Q1、未改变当前实验或N1的源码/队列/提醒。此节允许继续讨论query，覆盖历史一概“query暂缓”的设计限制，但不表示接口已经确认或新实验已实际排队。
+- 推荐Q1：4×2048可学习输入向量，直接进入既有VLM原生18层；无新Subtask decoder/Q-Former/MLP文本生成器。Q只读普通prefix P和其他Q，不读GT文字；原生文字T读P+Q+因果文字，Action只读原P。P本身不能读Q/T，避免Q→P→A间接泄漏；A位置不增加query长度。仍CE→B+Q、flow→A，B/Q对flow梯度为零，A不读GT/生成文字或query。
+- 此Q1是query辅助原生文字生成，不是强制query瓶颈或Action读取query；T保留直读P，所以Q可能被忽略，不能默认形成可解释语义槽。若用户重点是Action直接使用query，必须先明确其前向接口，不可只detach梯度便称Action接口未变。只读设计降低直接前向扰动，不宣称新增query完全无OOD。
+- 建议官方fresh B/A+新query，seed42/5000/global256/8卡、同N1最终micro/accum及left/right arm 178/20/train-only norm、单帧unroll1；排在N1后面不等于从N1权重继续训练。只规划这一新增单组，不默认追加query数量扫描、fixed-query训练对照、独立网络、历史、定位或ranking。B+Q同optimizer/联合clip1，A独立；query FP32参数、同LR、独立初始化随机流，须另过容量/保存恢复/因果/梯度/原生cache门槛。
+- 当前只可称“Q1候选/待确认计划”，没有Q1等待进程/训练run/耗时实测。N1有效root仍attempt_02，保持其计算源码指纹；以后Q1确认后须独立入口/schema/variant、测试commit、真实依赖N1及最终检查成功的接续收据，不能热改N1等待代码。
+
 ## N1实际排队状态（2026-09-11 15:13北京时间）
 
 - 最新有效接续器已派发并读回：logs/pi05_native_n1_20260911/attempt_02/dispatch_verified.json，queued=true、phase=waiting_predecessor，PID1256324/created1789110811.06，完整argv见launcher.process.json。GPU可见性覆盖为null（未继承CPU-only空列表），无N1 GPU工作或正式训练；不要误读attempt_01的历史waiting文件，不要重复派发。
