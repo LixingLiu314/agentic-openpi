@@ -2,6 +2,8 @@
 
 2026-09-12。授权：修复上次失败并重新开始N1训练；Q1仍只是待确认方案。
 
+当前结论（10:41北京时间）：原数值问题修复成功，完整模型检查通过；实际重启八卡工程时受新外部显存保留任务影响，三档容量全部失败，formal未启动。实现commit e005ecfa857670e9a45e11070cc1c9991acebb99。详见末节；不能把“修复通过”和“正式训练已启动”混为一谈。
+
 ## 原因：相同特征，不同词表投影形状
 
 原attempt_02已实际完成8卡micro32/accum1的4→8保存恢复，但在完整模型检查中退出，未启动formal。故障不是OOM或NaN。旧日志、工程checkpoint及source_manifest保留。
@@ -36,3 +38,23 @@
 - 新权威root：logs/pi05_native_n1_20260912/attempt_01。formal输出checkpoints/pi05_piper_native/n1_action_stop_seed42_v1，official fresh、seed42、5000/global256、首测micro32×1×8；保存/验证每500，最终5000优先。
 - dispatch_verified.json证明已派发；engineering_passed.json证明新门槛；formal输出startup_verified.json证明真实首10步云端/本地loss、B/A梯度与三类media核验。没有对应真实收据不能宣称完成。
 - 保持run_concurrent、保护其他任务及guard、不查GPU占用、不部署机器人。实现测试commit在派发之前；仅一次有界正式启动读取估ETA，然后更新原唯一完成提醒。
+
+## 实际重启结果：外部显存保留阻塞
+
+10:33:39派发新attempt_01，10:40:05有限工程流程退出，10:41:04做一次终态审计：
+
+| 每卡microbatch | 梯度累积 | GPU数 | Global batch | 结果 |
+| --- | --- | --- | --- | --- |
+| 32 | 1 | 8 | 256 | 首次update完成前CUDA OOM |
+| 16 | 2 | 8 | 256 | 首次update完成前CUDA OOM |
+| 8 | 4 | 8 | 256 | 首次update完成前CUDA OOM |
+
+三档均完成官方fresh装载并进入真实训练计算，但完成optimizer updates均0。新4→8恢复未完成，不能复用前一天工程状态声称本次成功。正式输出目录尚不存在，无正式loss/W&B startup或可用ETA。launcher及3个torchrun记录均已核对不再存活，145份指纹源码不变。
+
+OOM异常中的外部进程占约56.07GiB/卡。按异常PID做只读CPU进程身份核查，发现8个gpu_hold.py进程，PID375186–375193，创建时间1789180324.93；完整argv含`/media/raid/workspace/surongpeng/ws_liyan/robotwin2-runtime/openvla-oft/bin/python toolkits/gpu_hold.py --memory-fraction 0.70 --sleep-ms 20`。父268393/created1789178761.73是ws_liyan/RLinf的`run_robotwin_hybrid_optimization_a800.sh`。这些不是本项目的guard workers。未查询GPU占用API，未向外部任务/guard发信号。
+
+按既有共存规范登记外部pipeline的真实PID+创建时间lease，避免N1退出后本项目guard再次与其争用；不修改外部pipeline源码或行为。登记证据logs/pi05_native_n1_repair_20260912/external_pipeline_lease.json。此登记随真实进程退出失效，不能使用虚构常驻身份。
+
+权威终态：logs/pi05_native_n1_20260912/attempt_01/capacity_terminal.json，配套b32/b16/b8_capacity_failure.json与原始日志。原phase.json只记录最后到达阶段，failure.json/exit.json和真实身份才决定当前状态。
+
+需要资源协调或明确授权后才能处理外部保留任务并重试；没有自动再派发、没有新等待队列、Q1未启动。唯一完成提醒保持暂停，不能在未开训时制造完成ETA。原失败权重、这次工程目录与所有日志保留。

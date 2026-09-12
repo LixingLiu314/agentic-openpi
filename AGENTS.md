@@ -1,5 +1,13 @@
 # agentic-openpi server development
 
+## N1修复已提交；重新派发因外部容量阻塞退出（2026-09-12 10:41北京时间）
+
+- 原teacher logits问题已修复并实际通过完整官方尺寸模型的原生/因果/梯度检查；实现commit e005ecfa857670e9a45e11070cc1c9991acebb99。不是简单放宽阈值，完整teacher/Action最大差均0。旧工程checkpoint用于定位和修复验证，不作为formal初始化或新八卡恢复证据。
+- 新root logs/pi05_native_n1_20260912/attempt_01于10:33:39真实派发，依次测试8卡micro32×accum1、16×2、8×4（均global256），三档均在首次optimizer update完成前CUDA OOM，10:40:05有限流程exit1。capacity_terminal.json于10:41核验launcher及3个torchrun身份均已退出、145份计算源码不变；没有新4→8恢复成功记录、没有formal输出或startup10。phase.json仍是最后工程阶段的历史值，不代表仍在运行。不得重复派发同一root或把这次容量失败误读为数值修复无效。
+- OOM原始异常列出每卡外部占用约56.07GiB；仅按日志PID做CPU身份核对，未查询GPU利用率/占用API。确认8个375186–375193/created1789180324.93来自ws_liyan/RLinf的toolkits/gpu_hold.py --memory-fraction0.70，父268393/created1789178761.73为run_robotwin_hybrid_optimization_a800.sh。此PID只作历史证据，任何操作前重验真实身份。它们不属于我们的gpu_reservation workers，不得擅自停止/修改或扩大接管授权。
+- 依照已有共存规则，把真实外部pipeline身份登记为过期随进程退出的concurrent lease，避免我们的guard在N1退出后与该外部任务争用。证据logs/pi05_native_n1_repair_20260912/external_pipeline_lease.json；外部任务/guard没有收到信号。该保护登记不等于停止/控制它的授权。
+- 当前需要用户协调显存或明确授权处理上述外部保留任务，不能假称正式训练已重启或给无依据ETA。没有新增自动重试/等待队列；唯一vla-action-stop提醒保持PAUSED，资源问题解决且真实formal首10步通过后再估ETA并启用。同left/right arm、official fresh、B/A梯度与5000/global256合同保持；Q1未派发。
+
 ## N1失败修复及重新训练授权（2026-09-12，优先于下方历史排队状态）
 
 - 用户明确要求“解决上述问题后重新开始训练”。只修复并重启N1，不启动尚未确认接口的Q1或其他历史队列。旧parallel action_stop_seed42_v2已完成5000及最终原生检查；N1旧attempt_02于9月11日18:56在工程8步后的检查退出，正式输出尚未创建。实际进程身份审计确认旧两组7条记录均不再存活，证据logs/pi05_native_n1_repair_20260912/pre_repair.json。旧日志、source_manifest、工程权重和原始源码备份全部保留，不重写旧失败记录。
