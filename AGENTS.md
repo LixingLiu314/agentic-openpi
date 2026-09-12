@@ -1,5 +1,15 @@
 # agentic-openpi server development
 
+## N1正式训练已核验启动（2026-09-12 11:17北京时间，当前权威状态）
+
+- 用户授权后，已完整确认外部8个gpu_hold.py只是占卡，且父实验已FINISHED；11:06:35仅向375186–375193精确核验进程发SIGTERM，全部正常退出、父自然退出，无文件删除或外部训练/guard信号。holder_audit.json与holder_stop.json在logs/pi05_native_n1_20260912/attempt_02。范围/工具commit12620c95a73e446cd6b701451eec4def1e7331cb；旧阻塞状态已解除，不再重复停止这些历史PID。
+- 当前N1 root logs/pi05_native_n1_20260912/attempt_02，formal输出checkpoints/pi05_piper_native/n1_action_stop_seed42_v1。11:07:36派发后实跑全新8卡micro32×accum1的4→8保存恢复，B/A均8更新、8份rank状态完整；新checkpoint原生50×14/隔离/梯度门槛全部通过，teacher/Action最大差均0，CE梯度B28.49566/A0、flow B0/A0.786307。工程结果并非复用前一天权重来冒充新训练。
+- 11:13:51正式流程启动，官方fresh B/A 812个存储tensor核对，初始B/A计数0，无独立Subtask网络；正式不继承工程更新。正式训练SHA12620c95a73e446cd6b701451eec4def1e7331cb，模型数学是e005ecf修复版本。保持5000/global256/seed42/8卡32×1、left/right arm178/20/train-only norm、单帧unroll1、CE→B和flow→A、每500验证保存。Q1未派发。
+- 首10步W&B/local两loss、B/A梯度和三类media对账已通过startup_verified.json。11:17:57最后一次有界读取14/5000，8个真实rank存活，145份当前源码及归档源码全部匹配；root/startup_handoff.json保存完整身份和配置。launcher417027/created1789182455.36、formal torchrun427091/created1789182830.36只作历史启动身份，操作前重验。之后不再主动读取中间steps，除非用户新问或到ETA跟进。
+- 实测steps3–14平均4.1851916秒/update，剩余纯训练5.80小时；留2小时验证/存盘/最终原生检查余量，点估计9月12日19:05，预期约19:00–20:00，不保证共享负载不变。唯一vla-action-stop提醒已更新为当日19:30单次检查当前N1；届时未完成则一次有界重估并延后同一提醒，不短周期轮询。不把旧parallel完成或旧20260911/attempt_02、20260912/attempt_01失败当当前状态。
+- 已视觉审阅第一实际batch的三路输入/14维动作图，GT只展示不进入A；step1生成空串/truncated和动作误差属早期记录，不隐去或冒称语义/动作效果良好。第10步CE9.29141、all32 flow0.143629、B/A裁剪前范数130.5058/0.578731；两组独立clip1。当前只证明训练与记录链路正常，不证明真机成功。
+- 最新交付说明docs/pi05_native_n1_restart_20260912.md。旧日志/权重/指纹全部保留，运行中仅提交状态文档，不改计算源码。GPU工作仍run_concurrent，guard及其他任务保持，无GPU占用查询、push、机器人部署/服务/动作。
+
 ## 用户授权停止已确认的外部占卡程序并继续N1（2026-09-12）
 
 - 用户明确说“确认那个是占卡程序的话停掉就行”，随后“continue”。本授权只覆盖造成N1容量失败的这8个已记录gpu_hold.py进程，不覆盖其他训练、其他项目文件/模型、我们的gpu_reservation guard或任何未来未知任务。操作前重新核验PID+创建时间+完整argv+cwd+父子关系。

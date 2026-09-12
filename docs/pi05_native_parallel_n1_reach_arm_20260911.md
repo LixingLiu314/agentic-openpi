@@ -2,7 +2,9 @@
 
 日期：2026-09-11。用户选择：只进行N1，明确使用left/right arm版本数据。N0及其他对照不安排。
 
-当前终态（2026-09-12 10:41北京时间）：e005ecf数值修复已通过完整模型检查，但新attempt_01的8卡32×1、16×2、8×4均因外部GPU保留进程占用约56.07GiB/卡而实测OOM，正式未启动、三档均0完成update。流程已退出，证据capacity_terminal.json；等待资源协调或用户明确处理授权，不自动继续重试。以下排队/重新训练计划不代表当前正在训练。
+当前正式状态（2026-09-12 11:17北京时间）：用户授权停止确认纯占卡的8个外部gpu_hold.py后，新root logs/pi05_native_n1_20260912/attempt_02已重新实跑并通过8卡32×1的4→8恢复及完整原生/梯度门槛。正式n1_action_stop_seed42_v1从official fresh开始，首10步W&B/local/media核验通过，最后一次有界读取14/5000、8rank存活、145份源码不变。训练SHA12620c95a73e446cd6b701451eec4def1e7331cb；4.185秒/步，含2小时余量点估计19:05，唯一提醒19:30单次检查。详见docs/pi05_native_n1_restart_20260912.md；下方阻塞/排队均为历史。
+
+历史容量失败（2026-09-12 10:41北京时间）：e005ecf数值修复已通过完整模型检查，但attempt_01的8卡32×1、16×2、8×4均因外部GPU保留进程占用约56.07GiB/卡而实测OOM，正式未启动、三档均0完成update。该流程已退出，capacity_terminal.json证据保留。
 
 最新修复状态（2026-09-12）：用户授权修复并重新训练。旧N1 attempt_02实际完成8卡工程4→8，但在原生teacher logits严格检查退出，正式未开始；下方“等待前驱”仅为历史。修复报告见docs/pi05_native_n1_repair_20260912.md。新root logs/pi05_native_n1_20260912/attempt_01；不复用旧source_manifest或工程更新，重过全部门槛后official fresh formal。真实启动与首10步收据另行更新。
 
