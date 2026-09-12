@@ -8,6 +8,7 @@ import select
 import subprocess
 import sys
 import time
+import tempfile
 from unittest.mock import patch
 os.environ['CUDA_VISIBLE_DEVICES']=''
 os.environ['JAX_PLATFORMS']='cpu'
@@ -22,7 +23,7 @@ from openpi.training.decoded_video_cache import create_cached_dataset
 from openpi.training.subtask_batch import SubtaskTrainingDataset
 from openpi.training.native_subtask_provenance import build_run_config
 from openpi.training.native_subtask_wandb import event_payload
-from run_native_n1 import verify,open_pidfd,matching_process,train_cmd
+from run_native_n1 import verify,open_pidfd,matching_process,train_cmd,predecessor_status,write
 from train_native_n1 import parse_args
 from dispatch_native_n1 import queue_environment
 
@@ -50,8 +51,26 @@ def main():
     assert poll.poll(5000),'Real pidfd child exit was not delivered'
     os.close(descriptor);assert child.wait()==0
     verify(Path('logs/pi05_parallel_action_stop_20260911/attempt_04'))
-    predecessor=json.loads(Path('logs/pi05_parallel_action_stop_20260911/attempt_04/formal_launcher.process.json').read_text())
-    matching_process(predecessor)
+    predecessor=predecessor_status(Path('logs/pi05_parallel_action_stop_20260911/attempt_04'))
+    # A dead launcher is not success unless all terminal gates really passed.
+    with tempfile.TemporaryDirectory(prefix='n1_predecessor_') as folder:
+        fixture=Path(folder)
+        write(fixture/'source_manifest.json',{})
+        write(fixture/'formal_launcher.process.json',dict(pid=record['pid'],created=record['created'],
+            command=[sys.executable,'scripts/run_parallel_action_stop.py']))
+        complete=dict(completed=True,native_gate_passed=True,completed_steps=5000)
+        with patch('run_native_n1.matching_process',side_effect=psutil.NoSuchProcess(record['pid'])):
+            for bad in [dict(completed=False),dict(native_gate_passed=False),dict(completed_steps=8)]:
+                write(fixture/'complete.json',{**complete,**bad})
+                try:predecessor_status(fixture)
+                except ValueError:pass
+                else:raise AssertionError('Failed predecessor accepted')
+            write(fixture/'complete.json',complete)
+            assert predecessor_status(fixture)['state']=='completed'
+        with patch('run_native_n1.matching_process',side_effect=ValueError('PID reused')):
+            try:predecessor_status(fixture)
+            except ValueError:pass
+            else:raise AssertionError('Reused predecessor PID accepted')
     with patch.object(sys,'argv',['train_native_n1.py','--output','checkpoints/pi05_piper_native/n1_action_stop_seed42_v1',
         '--decoded-cache','.stage1_staging/piper_rgb224_reach_arm_v1']):args=parse_args()
     assert (args.arm,args.unroll,args.mode,args.global_batch,args.seed)==('stateless',1,'action_stop',256,42)
@@ -79,6 +98,7 @@ def main():
     assert '--nproc-per-node=8' in cmd and 'scripts/train_native_n1.py' in cmd
     result=dict(passed=True,time=time.time(),cpu_structure=structural,pidfd_exit_event=True,
         predecessor_source_manifest_unchanged=True,predecessor_identity_verified=True,
+        predecessor_state=predecessor['state'],completed_predecessor_failure_rejection=True,
         official_weights_sha256=prov['official_weights_sha256'],
         data_root=dc.local_root,repo_id=dc.repo_id,split_sha256=prov['split_sha256'],norm_sha256=prov['norm_sha256'],
         train_frames=len(dataset),labels=vocabulary,max_target_tokens_including_eos=int(mask.sum(1).max()),

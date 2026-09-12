@@ -1,5 +1,13 @@
 # agentic-openpi server development
 
+## N1失败修复及重新训练授权（2026-09-12，优先于下方历史排队状态）
+
+- 用户明确要求“解决上述问题后重新开始训练”。只修复并重启N1，不启动尚未确认接口的Q1或其他历史队列。旧parallel action_stop_seed42_v2已完成5000及最终原生检查；N1旧attempt_02于9月11日18:56在工程8步后的检查退出，正式输出尚未创建。实际进程身份审计确认旧两组7条记录均不再存活，证据logs/pi05_native_n1_repair_20260912/pre_repair.json。旧日志、source_manifest、工程权重和原始源码备份全部保留，不重写旧失败记录。
+- 同一工程step_000008/SHA aa57379b3aa3f38de2fa7e3487c349fa7df8aa0bc7efca7beb2980b51d0501c3实测定位：训练投影输入1×16×2048，cached检查先投影1×20×2048再切片。目标隐藏特征和norm后特征逐元素相同；BF16词表投影197/2828672项差异、max0.25，argmax无差异，CE差1.1920929e-7。同形状投影、关闭TF32的FP32词表对照、原生Action均逐元素一致。诊断脚本scripts/diagnose_native_n1_parity.py及diagnostic.json记录结果；这不是OOM、NaN或架构/梯度错误的证据。
+- 修复cached teacher-forcing在原生norm/lm_head前选目标行，新增teacher_logits_cached，供验证loss和严格检查共用。训练joint_outputs、训练loss公式、生成token路径、模型参数/梯度合同不变，不放宽原有rtol=0/atol=0一致性门槛。CPU新增batch2/变长目标/投影形状回归，并保留独立HF/逐token/保存恢复测试。
+- 派发/CPU预检支持“前驱身份已退出且complete5000+native_gate_passed”，不要求已完成前驱仍存活；失败/缺失终态、PID复用、源码变化及重复root/已存在formal输出均拒绝。保留空CUDA可见性修复。新的root logs/pi05_native_n1_20260912/attempt_01；只有实际dispatch_verified和后续startup_verified可证明派发及正式启动，不根据本段规划宣称已开训。
+- 本次重做完整模型梯度/原生门槛，并从官方fresh重跑8卡32×1的4→8工程保存恢复；全部通过后再次官方fresh正式5000/global256/seed42、同left/right arm178/20/train-only norm。正式输出仍checkpoints/pi05_piper_native/n1_action_stop_seed42_v1，不继承任何工程更新。所有GPU任务run_concurrent，其他任务/guard不动；测试和实现先commit，启动后只另提交状态文档。首10步W&B核验与一次有界ETA后更新唯一vla-action-stop完成提醒，不短周期轮询。
+
 ## N1之后的输入query实验：本轮规划，未派发（2026-09-11）
 
 - 用户希望“之后再排一个query token的实验”，明确query是直接输入VLM的token，但具体机制尚未想清楚，要求先帮助规划。候选协议docs/pi05_native_query_q1_plan_20260911.md；本轮只新增设计文档和本指导，未实现/派发Q1、未改变当前实验或N1的源码/队列/提醒。此节允许继续讨论query，覆盖历史一概“query暂缓”的设计限制，但不表示接口已经确认或新实验已实际排队。

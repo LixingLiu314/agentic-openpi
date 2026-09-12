@@ -210,7 +210,7 @@ class NativeSubtaskModel(nn.Module):
         return SimpleNamespace(state=state, mask=mask, cache=cache,
             pairs=cache_pairs(cache, len(wrapper.paligemma.language_model.layers)), prefix=prefix)
 
-    def logits_cached(self, context, ids, valid=None, past=None):
+    def logits_cached(self, context, ids, valid=None, past=None, *, output_start=0):
         valid = torch.ones_like(ids, dtype=torch.bool) if valid is None else valid
         past_len = 0 if past is None else past[0][0].shape[2]
         positions = context.mask.sum(1)[:, None] + past_len + torch.arange(ids.shape[1], device=ids.device)[None]
@@ -222,12 +222,19 @@ class NativeSubtaskModel(nn.Module):
             hidden, kv = native_text_layer(wrapper, i, hidden, pk, pv, positions, attention,
                                           None if past is None else past[i])
             caches.append(kv)
-        return self.text_logits(hidden), tuple(caches)
+        # Select supervised rows BEFORE final norm/vocabulary projection, just
+        # as joint_outputs does. Projecting the cue too changes GEMM shape and
+        # can round BF16 differently even for bit-identical hidden features.
+        return self.text_logits(hidden[:, output_start:]), tuple(caches)
+
+    def teacher_logits_cached(self, context, target_ids, target_mask):
+        ids, valid = self.teacher_inputs(target_ids, target_mask)
+        logits, _ = self.logits_cached(context, ids, valid, output_start=len(self.cue_ids) - 1)
+        return logits
 
     def subtask_loss(self, context, target_ids, target_mask):
-        ids, valid = self.teacher_inputs(target_ids, target_mask)
-        logits, _ = self.logits_cached(context, ids, valid)
-        return self.ce(logits[:, len(self.cue_ids) - 1:], target_ids, target_mask)
+        logits = self.teacher_logits_cached(context, target_ids, target_mask)
+        return self.ce(logits, target_ids, target_mask)
 
     @torch.no_grad()
     def generate_subtask(self, context):

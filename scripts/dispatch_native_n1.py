@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 import psutil
-from run_native_n1 import verify,matching_process,write
+from run_native_n1 import verify,matching_process,write,predecessor_status
 
 GIT='/media/raid/workspace/surongpeng/anaconda3/bin/git'
 
@@ -30,8 +30,9 @@ def main():
     if changes:raise ValueError('Commit scoped implementation before dispatch: '+changes)
     commit=subprocess.check_output([GIT,'rev-parse','HEAD'],text=True).strip()
     predecessor=Path('logs/pi05_parallel_action_stop_20260911/attempt_04')
-    matching_process(json.loads((predecessor/'formal_launcher.process.json').read_text()))
-    verify(predecessor)
+    previous=predecessor_status(predecessor)
+    if Path('checkpoints/pi05_piper_native/n1_action_stop_seed42_v1').exists():
+        raise FileExistsError('Formal output already exists; no implicit overwrite or resume')
     command=[sys.executable,'scripts/run_native_n1.py','--root',str(a.root)]
     with (a.root/'launcher.log').open('x') as log:
         child=subprocess.Popen(command,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,env=queue_environment())
@@ -46,11 +47,15 @@ def main():
     visibility=proc.environ().get('CUDA_VISIBLE_DEVICES')
     if visibility=='':raise ValueError('CPU-only visibility leaked into the future GPU queue')
     phase=json.loads((a.root/'phase.json').read_text())
-    if phase['phase']!='waiting_predecessor':raise ValueError('Unexpected dispatch phase: '+str(phase))
+    if phase['phase'] not in {'waiting_predecessor','acquiring_reservation',
+                             'engineering_save_resume','engineering_native_gradient_gate'}:
+        raise ValueError('Unexpected dispatch phase: '+str(phase))
     verify(a.root);verify(predecessor)
-    receipt=dict(queued=True,phase=phase['phase'],training_started=False,gpu_work_started=False,
+    receipt=dict(queued=phase['phase']=='waiting_predecessor',dispatched=True,phase=phase['phase'],
+        formal_training_started=False,engineering_started=phase['phase'].startswith('engineering_'),
+        gpu_work_started=phase['phase'].startswith('engineering_'),
         root=str(a.root),output='checkpoints/pi05_piper_native/n1_action_stop_seed42_v1',
-        identity=identity,predecessor=phase['predecessor'],dispatch_git_commit=commit,
+        identity=identity,predecessor=previous,dispatch_git_commit=commit,
         cwd=str(Path.cwd()),cpu_preflight_passed=True,wandb_view=view['url'],
         cuda_visibility_override=visibility,cpu_only_mask_removed=True,time=time.time())
     write(a.root/'dispatch_verified.json',receipt);print(json.dumps(receipt),flush=True)

@@ -74,9 +74,7 @@ def main():
             corrupted=batch.target_ids.clone();corrupted[:,1]=42
             later,_=joint(corrupted)
             torch.testing.assert_close(logits[:,:2],later[:,:2],rtol=0,atol=0)
-            ids,valid=model.teacher_inputs(batch.target_ids,batch.target_mask)
-            cached,_=model.logits_cached(context,ids,valid)
-            cached=cached[:,len(model.cue_ids)-1:]
+            cached=model.teacher_logits_cached(context,batch.target_ids,batch.target_mask)
             torch.testing.assert_close(logits[batch.target_mask],cached[batch.target_mask],rtol=0,atol=0)
             noisy=times[:,None,None]*fixed+(1-times[:,None,None])*batch.actions
             native=model.base.denoise_step(context.state,context.mask,context.cache,noisy,times)

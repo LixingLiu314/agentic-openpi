@@ -2,6 +2,8 @@
 
 日期：2026-09-11。用户选择：只进行N1，明确使用left/right arm版本数据。N0及其他对照不安排。
 
+最新修复状态（2026-09-12）：用户授权修复并重新训练。旧N1 attempt_02实际完成8卡工程4→8，但在原生teacher logits严格检查退出，正式未开始；下方“等待前驱”仅为历史。修复报告见docs/pi05_native_n1_repair_20260912.md。新root logs/pi05_native_n1_20260912/attempt_01；不复用旧source_manifest或工程更新，重过全部门槛后official fresh formal。真实启动与首10步收据另行更新。
+
 状态：2026-09-11 15:13北京时间已真实排队。有效root logs/pi05_native_n1_20260911/attempt_02，phase=waiting_predecessor，PID1256324/created1789110811.06；dispatch_verified.json读回queued=true、GPU可见性覆盖为null。派发commit3d911c91a1ffad120d766a5476efe9cb8ce871d7，核心实现5f3408a。当前action_stop_seed42_v2及其最终检查成功结束后，才执行N1八卡门槛，再fresh正式训练。完整官方模型及八卡GPU门槛尚未执行。旧attempt_01因CPU-only环境继承问题只停止了尚无子进程/GPU工作的waiter，证据保留；不再使用其历史waiting状态。
 
 ## 1. 唯一新实验

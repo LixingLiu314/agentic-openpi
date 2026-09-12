@@ -103,6 +103,19 @@ def main():
         context=model.prepare_context(observation,batch.global_prompts)
         cached,_=model.logits_cached(context,ids,valid)
         torch.testing.assert_close(logits,cached[:,len(model.cue_ids)-1:],rtol=2e-5,atol=1e-6)
+        # Regression for full-size BF16 head: the supervised teacher path must
+        # project exactly the same rows/shape as joint training, not project
+        # cue rows and only slice the large logits afterward. Batch=2 covers
+        # noncontiguous token slices and variable valid target lengths.
+        with patch.object(model,'text_logits',wraps=model.text_logits) as projection:
+            joint_logits,_=joint()
+            teacher=model.teacher_logits_cached(context,batch.target_ids,batch.target_mask)
+            inputs=[call.args[0] for call in projection.call_args_list]
+            assert [list(h.shape) for h in inputs]==[[2,4,32],[2,4,32]]
+            torch.testing.assert_close(inputs[0],inputs[1],rtol=2e-5,atol=1e-6)
+        torch.testing.assert_close(joint_logits,teacher,rtol=2e-5,atol=1e-6)
+        torch.testing.assert_close(model.subtask_loss(context,batch.target_ids,batch.target_mask),
+            model.ce(teacher,batch.target_ids,batch.target_mask),rtol=0,atol=0)
         # Independent reference: run original HF Gemma once over prefix+text
         # with prefix-block/text-causal mask, not our text helper.
         w=model.base.paligemma_with_expert
@@ -160,5 +173,6 @@ def main():
     print(json.dumps(dict(passed=True,real_tiny_hf_layers=2,native_head_tied=True,
         no_new_text_parameters=True,causal_shift=True,action_gt_invariant=True,
         native_joint_and_incremental_cache_parity=True,prefix_cache_immutable=True,
+        teacher_projection_shape_regression=True,
         ce_gradients=ce,flow_gradients=flow,optimizer_resume=True)))
 if __name__=='__main__':main()

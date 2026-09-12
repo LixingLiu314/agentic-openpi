@@ -56,11 +56,25 @@ def matching_process(record):
         raise ValueError('Predecessor command identity changed')
     return p
 
-def wait_predecessor(root,predecessor):
+def predecessor_status(predecessor):
+    """Allow an identified live launcher OR its successful terminal receipt."""
     record=json.loads((predecessor/'formal_launcher.process.json').read_text())
-    expected='scripts/run_parallel_action_stop.py'
-    if not any(Path(x).resolve()==Path(expected).resolve() for x in record['command'][1:]):
+    if not any(Path(x).resolve()==Path('scripts/run_parallel_action_stop.py').resolve()
+               for x in record['command'][1:]):
         raise ValueError('Not the requested predecessor launcher')
+    verify(predecessor)
+    try:
+        matching_process(record)
+    except (psutil.NoSuchProcess,ProcessLookupError):
+        complete=json.loads((predecessor/'complete.json').read_text())
+        if (complete.get('completed') is not True or complete.get('native_gate_passed') is not True
+                or complete.get('completed_steps')!=5000):
+            raise ValueError('Predecessor did not successfully complete all final gates')
+        return dict(state='completed',record=record,complete=complete)
+    return dict(state='running',record=record)
+
+def wait_predecessor(root,predecessor):
+    record=predecessor_status(predecessor)['record']
     write(root/'predecessor.json',dict(root=str(predecessor),**record))
     verify(predecessor)
     descriptor=None
@@ -157,6 +171,7 @@ def main():
     signal.signal(signal.SIGTERM,lambda *_:(_ for _ in ()).throw(KeyboardInterrupt()))
     if a.managed:
         pipeline(a);return
+    if a.output.exists():raise FileExistsError('Formal output already exists; no implicit overwrite or resume')
     with (a.root/'sequence.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         manifest=a.root/'source_manifest.json'
@@ -170,6 +185,8 @@ def main():
         try:
             wait_predecessor(a.root,a.predecessor)
             verify(a.root)
+            write(a.root/'phase.json',dict(phase='acquiring_reservation',time=time.time(),
+                predecessor_completed=True,formal_training_started=False))
             code=run_concurrent(Path('logs/pi05_subtask_stage1/gpu_reservation'),a.root/'managed.log',
                 [sys.executable,__file__,'--root',str(a.root),'--cache',str(a.cache),'--output',str(a.output),'--managed'])
             write(a.root/'exit.json',dict(code=code,time=time.time()))
