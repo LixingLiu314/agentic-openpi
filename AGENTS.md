@@ -1,5 +1,13 @@
 # agentic-openpi server development
 
+## parallel action-stop 候选已转移至 Agilex（2026-09-12，本次操作）
+
+- 用户要求把训练完成的 checkpoint 转移到 Agilex。已转移 `checkpoints/pi05_piper_parallel/action_stop_seed42_v2/step_005000` 的推理载荷到 `/home/agilex/agentic-openpi/checkpoints/pi05_piper_parallel/action_stop_seed42_v2`：77个文件、7564742113字节，含`model.safetensors`、`metadata.json`、`assets`、`sources`、`runtime_sources`、`candidate/best/policy_load_gate/validation_005000/run_config`等。未传`training_rank_*.pt`优化器分片（约14GB，推理不需要）与`wandb`/中间step。
+- 完整性：`model.safetensors` SHA256 `0395ca6ab05c9e5d07843be16535fa1e7f7470ad9f3feeaf7e1e1b9854ca69ac`、`metadata.json` SHA256 `18ef678c562e1fcdc40ee83f7ba8e68d3a5f25941f8cf74d84b9284b317efe80`。机器人拉取收据`all_ok=true`，77/77文件sha256通过，耗时630.8秒；机器人侧独立重算的`model.safetensors`哈希与服务器一致。
+- 传输方式沿用只读临时通道：机器人生成一次性ed25519密钥，服务器`~/.ssh/authorized_keys`新增一条`restrict,expiry-time="20260913000000",command=...`强制命令行（`stream_checkpoint.py`仅按manifest白名单提供`list`/`get`）。拉取完成后已撤销该行（authorized_keys回到10行、该密钥0次出现），并从机器人删除私钥；授权前已备份`authorized_keys.bak_20260912`。机器人默认密钥`id_ed25519`始终未获服务器授权。证据：服务器`logs/agilex_parallel_transfer_20260912/{manifest.json,transfer_receipt.json,authorized_keys_line.txt}`，机器人`logs/parallel_transfer_20260912/pull.log`与checkpoint内`pull_receipt.json`、`transfer_manifest.json`。
+- 关键未决：**该checkpoint目前还不能在机器人或服务器上加载**。`scripts/serve_subtask_policy.py`只有M3/R1/recurrent/official/backbone分支，没有`parallel_subtask`分支；`create_parallel_policy`仅被`scripts/check_parallel_action_stop.py`与`scripts/diagnose_parallel_parity.py`调用。机器人仓库（仍在其自身`upstream-openpi-main`分支）也缺少`src/openpi/models_pytorch/parallel_subtask.py`与`src/openpi/policies/parallel_subtask_policy.py`。本次只做转移与完整性校验，没有部署、启动服务、改GUI或执行机器人动作，也没有做CPU加载门槛；如需真机加载，需另行授权并补齐loader/dispatch/GUI与加载检查。
+- 本次不影响N1正式训练（其root `logs/pi05_native_n1_20260912/attempt_02`与输出`checkpoints/pi05_piper_native/n1_action_stop_seed42_v1`未改动），不涉及其他任务/guard。
+
 ## N1正式训练已核验启动（2026-09-12 11:17北京时间，当前权威状态）
 
 - 用户授权后，已完整确认外部8个gpu_hold.py只是占卡，且父实验已FINISHED；11:06:35仅向375186–375193精确核验进程发SIGTERM，全部正常退出、父自然退出，无文件删除或外部训练/guard信号。holder_audit.json与holder_stop.json在logs/pi05_native_n1_20260912/attempt_02。范围/工具commit12620c95a73e446cd6b701451eec4def1e7331cb；旧阻塞状态已解除，不再重复停止这些历史PID。
