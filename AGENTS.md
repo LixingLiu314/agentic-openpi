@@ -1,5 +1,13 @@
 # agentic-openpi server development
 
+## 用户授权停止已确认的外部占卡程序并继续N1（2026-09-12）
+
+- 用户明确说“确认那个是占卡程序的话停掉就行”，随后“continue”。本授权只覆盖造成N1容量失败的这8个已记录gpu_hold.py进程，不覆盖其他训练、其他项目文件/模型、我们的gpu_reservation guard或任何未来未知任务。操作前重新核验PID+创建时间+完整argv+cwd+父子关系。
+- 已完整审阅ws_liyan/RLinf的toolkits/gpu_hold.py及其父run_robotwin_hybrid_optimization_a800.sh：前者只做显存分配/随机矩阵乘法/睡眠，SIGTERM可正常退出；父流程在10:32:05明确记录FINISHED后才启动这8个holder，末尾单次wait无重启逻辑。当前父进程仅有这8个子孙，无训练/评估子进程。dry-run证据logs/pi05_native_n1_20260912/attempt_02/holder_audit.json及两脚本SHA。
+- 审计工具scripts/stop_confirmed_gpu_holders_20260912.py默认只检查，--apply仅向精确核验的8个holder发SIGTERM；不发信号给父/tmux，不删除文件；holder退出后父可自然结束。若身份/源码/父子工作不符或30秒未退出，停止并调查，不扩大目标。成功必须以holder_stop.json为准，不能用本说明冒充已完成。
+- 新N1控制root logs/pi05_native_n1_20260912/attempt_02，重跑CPU及真实八卡32×1的4→8保存恢复和新完整原生/梯度检查，通过后official fresh正式5000/global256/seed42，同left/right arm数据、无独立Subtask decoder、CE→B/flow→A。模型/训练源码保持e005ecf修复版本，不继承任何工程更新。上一attempt_01三档OOM与所有证据保留，formal输出不存在时仍用n1_action_stop_seed42_v1。
+- 所有新GPU工作run_concurrent，不查询GPU占用；实现提交后再派发，检查真实首10步W&B/local两loss、B/A梯度及媒体后只做一次有界读取估ETA，再更新唯一vla-action-stop提醒。Q1不启动，无机器人部署/服务/动作授权。
+
 ## N1修复已提交；重新派发因外部容量阻塞退出（2026-09-12 10:41北京时间）
 
 - 原teacher logits问题已修复并实际通过完整官方尺寸模型的原生/因果/梯度检查；实现commit e005ecfa857670e9a45e11070cc1c9991acebb99。不是简单放宽阈值，完整teacher/Action最大差均0。旧工程checkpoint用于定位和修复验证，不作为formal初始化或新八卡恢复证据。
